@@ -85,8 +85,8 @@ void PopulateDummy() {
   g_spr2 = new Sprite(2);
   g_spr3 = new Sprite(3);
   g_sprBrick = new Sprite(4);
-  SpriteInstance* i0 = new SpriteInstance(0,       0, 100, 100, g_spr0);
-  SpriteInstance* i1 = new SpriteInstance(-100.0f, 0, 100, 100, g_spr1);
+  //SpriteInstance* i0 = new SpriteInstance(0,       0, 100, 100, g_spr0);
+  //SpriteInstance* i1 = new SpriteInstance(-100.0f, 0, 100, 100, g_spr1);
   //SpriteInstance* iPlayer = new SpriteInstance(-200.0f, 0, 100, 100, g_spr2);
   PlayerInstance* iPlayer = new PlayerInstance(-200.0f, 0, 100, 100, 0, 0, 75, 100, g_spr2);
 

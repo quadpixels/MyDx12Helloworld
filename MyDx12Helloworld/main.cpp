@@ -48,6 +48,8 @@ ID3D12Resource* g_constantbuffer;
 unsigned char* g_pCbvDataBegin;
 int g_cbvDescriptorSize;
 
+bool g_init_done = false;
+
 const wchar_t* texNames[] = { 
   L"pic2.png",
   L"pic1.png", 
@@ -118,7 +120,7 @@ unsigned char* LoadTexture(LPCWSTR file_name, UINT* w, UINT* h) {
 
 void InitDevice() {
   UINT dxgiFactoryFlags = 0;
-  bool useWarpDevice = true;
+  bool useWarpDevice = false;
 
   ID3D12Debug* debugController;
   if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController)))) {
@@ -568,6 +570,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
   InitTexture();
   InitConstantBuffer();
   EndInitializeFence();
+  g_init_done = true;
 
   // GAMEPLAY!
   PopulateDummy();
@@ -614,6 +617,7 @@ void Update() {
 }
 
 void Render() {
+  if (g_init_done == false) return;
 
   // Populate Command List
   CE(g_commandallocator->Reset());
@@ -654,9 +658,17 @@ void Render() {
   g_commandlist1->IASetVertexBuffers(0, 1, &g_vertexbufferview1);
 
   g_commandlist->SetGraphicsRootConstantBufferView(1, g_constantbuffer->GetGPUVirtualAddress()); // the CB is in slot 1 of the root signature...
-  g_commandlist->DrawInstanced(6, 1, 0, 0);
+  // Make Debug layer happy
+  
+  //g_commandlist->SetGraphicsRootDescriptorTable(0, gpuSrvHandle);
+  //g_commandlist->DrawInstanced(6, 1, 0, 0);
+
+  CD3DX12_GPU_DESCRIPTOR_HANDLE gpuSrvHandle;
 
   if (g_showBoundingBox) {
+    // mAKE dEBUG LAYER HAPPY
+    gpuSrvHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(g_srvheap->GetGPUDescriptorHandleForHeapStart());
+    g_commandlist1->SetGraphicsRootDescriptorTable(0, gpuSrvHandle);
     g_commandlist1->SetGraphicsRootConstantBufferView(1, g_constantbuffer->GetGPUVirtualAddress()); // the CB is in slot 1 of the root signature...
     g_commandlist1->DrawInstanced(12, 1, 0, 0);
   }
@@ -667,7 +679,7 @@ void Render() {
     SpriteInstance* pSprInst = g_spriteInstances[i];
     const int textureId = pSprInst->pSprite->textureId;
 
-    CD3DX12_GPU_DESCRIPTOR_HANDLE gpuSrvHandle(g_srvheap->GetGPUDescriptorHandleForHeapStart());
+    gpuSrvHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(g_srvheap->GetGPUDescriptorHandleForHeapStart());
     gpuSrvHandle.Offset(textureId * g_cbvDescriptorSize);
 
     g_commandlist->SetGraphicsRootDescriptorTable(0, gpuSrvHandle);

@@ -1,0 +1,8 @@
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/.vs/MyDx12Helloworld/v15
+/MyDx12Helloworld/x64/Debug
+/x64/Debug
+/MyDx12Helloworld.7z
