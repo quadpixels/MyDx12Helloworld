@@ -21,6 +21,12 @@ struct PSInput
   float4 color : COLOR;
 };
 
+cbuffer PerSceneCB : register(b1)
+{
+  float4x4 view;
+  float4x3 projection;
+}
+
 // Add this: NULL error
 cbuffer SceneConstantBuffer : register(b0)
 {
@@ -34,12 +40,14 @@ PSInput VSMain(float4 position : POSITION, float4 color : COLOR)
 {
   PSInput result;
 
-  float half_h = h / win_h * 2.0f;
-  float half_w = w / win_w * 2.0f;
+  float half_h = h / 100 * 2.0f;
+  float half_w = w / 100 * 2.0f;
   result.position = mul(orientation, position)  // Unit square
     * float4(half_w, half_h, 1.0f, 1.0f) // Aspect ratio correction
-    + float4(x / (win_w / 2), y / (win_h / 2), 0, 0); // Translation
+    + float4(x / (100 / 2), y / (100 / 2), 0, 0); // Translation
   result.color = color;
+
+  result.position = mul(projection, mul(view, result.position));
 
   return result;
 }

@@ -8,6 +8,11 @@
 #include <windows.h>
 #include <DirectXMath.h>
 
+struct PerSceneCBData {
+  DirectX::XMMATRIX view;
+  DirectX::XMMATRIX projection;
+};
+
 class Sprite {
 public:
   float u0, v0, u1, v1; // location in the sprite sheet
@@ -21,6 +26,9 @@ public:
   int facing; // 1 or -1
   void UpdateGravity(float secs);
   void Jump(float vy);
+  bool is_left_pressed;
+  bool is_right_pressed;
+  bool is_jump_pressed;
 };
 
 class SpriteInstance {

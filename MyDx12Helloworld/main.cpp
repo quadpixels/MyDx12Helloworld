@@ -68,6 +68,8 @@ struct VertexAndColor {
   float x, y, z, r, g, b, a;
 };
 
+PerSceneCBData g_per_scene_cb_data;
+
 struct ConstantBufferData {
   ConstantBufferData() {
     x = y = w = h = win_w = win_h = 0.0f;
@@ -78,6 +80,8 @@ struct ConstantBufferData {
   DirectX::XMMATRIX orientation;
 };
 
+float g_cam_delta_x = 0;
+float g_cam_delta_y = 0;
 ConstantBufferData g_constantbufferdata;
 
 void CE(HRESULT x) {
@@ -216,9 +220,10 @@ void InitAssets() {
     ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC); // We have only 1 table: { SRV, SRV, CBV }
 //    ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE);
 
-    CD3DX12_ROOT_PARAMETER1 rootParameters[2];
+    CD3DX12_ROOT_PARAMETER1 rootParameters[3];
     rootParameters[0].InitAsDescriptorTable(1, &ranges[0], D3D12_SHADER_VISIBILITY_PIXEL);
     rootParameters[1].InitAsConstantBufferView(0U, 0U, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_VERTEX);
+    rootParameters[2].InitAsConstantBufferView(1U, 0U, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_VERTEX);
 //    rootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
 //    rootParameters[1].Descriptor = rootCbvDescriptor;
 //    rootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
@@ -570,6 +575,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
   InitTexture();
   InitConstantBuffer();
   EndInitializeFence();
+  
+  {
+    // Proj matrix
+    float aspect_ratio = WIN_W * 1.0 / WIN_H;
+    float fovy = 45.0f / (180.0f / 3.14159f);
+    g_per_scene_cb_data.projection = DirectX::XMMatrixPerspectiveFovLH(fovy, aspect_ratio, 0.1f, 100.0f);
+  }
+
   g_init_done = true;
 
   // GAMEPLAY!
@@ -600,6 +613,11 @@ void Update() {
   CD3DX12_RANGE readRange(0, 0);		// We do not intend to read from this resource on the CPU.
   CE(g_constantbuffer->Map(0, &readRange, (void**)&g_pCbvDataBegin));
 
+  // CB layout:
+  // [0] = scene projection & view matrix
+  // [1..N] = obj-wise locations
+  memcpy(g_pCbvDataBegin, &g_per_scene_cb_data, sizeof(g_per_scene_cb_data));
+
   for (int i = 0; i < N; i++) {
     SpriteInstance* sInst = g_spriteInstances.at(i);
     ConstantBufferData d;
@@ -610,7 +628,7 @@ void Update() {
     d.win_h = WIN_H;
     d.win_w = WIN_W;
     d.orientation = sInst->orientation;
-    memcpy(g_pCbvDataBegin + i*ALIGN, &d, sizeof(d));
+    memcpy(g_pCbvDataBegin + (1+i)*ALIGN, &d, sizeof(d));
   }
 
   g_constantbuffer->Unmap(0, NULL);
@@ -658,7 +676,6 @@ void Render() {
   g_commandlist1->IASetVertexBuffers(0, 1, &g_vertexbufferview1);
 
   g_commandlist->SetGraphicsRootConstantBufferView(1, g_constantbuffer->GetGPUVirtualAddress()); // the CB is in slot 1 of the root signature...
-  // Make Debug layer happy
   
   //g_commandlist->SetGraphicsRootDescriptorTable(0, gpuSrvHandle);
   //g_commandlist->DrawInstanced(6, 1, 0, 0);
@@ -666,15 +683,20 @@ void Render() {
   CD3DX12_GPU_DESCRIPTOR_HANDLE gpuSrvHandle;
 
   if (g_showBoundingBox) {
-    // mAKE dEBUG LAYER HAPPY
+    // Make debug layer happy
     gpuSrvHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(g_srvheap->GetGPUDescriptorHandleForHeapStart());
     g_commandlist1->SetGraphicsRootDescriptorTable(0, gpuSrvHandle);
-    g_commandlist1->SetGraphicsRootConstantBufferView(1, g_constantbuffer->GetGPUVirtualAddress()); // the CB is in slot 1 of the root signature...
+    g_commandlist1->SetGraphicsRootConstantBufferView(1, g_constantbuffer->GetGPUVirtualAddress());
+    g_commandlist1->SetGraphicsRootConstantBufferView(2, g_constantbuffer->GetGPUVirtualAddress());
+
     g_commandlist1->DrawInstanced(12, 1, 0, 0);
   }
 
   const size_t N = g_spriteInstances.size();
   const UINT ALIGN = 256;
+
+  g_commandlist->SetGraphicsRootConstantBufferView(2, g_constantbuffer->GetGPUVirtualAddress());
+
   for (int i = 0; i < N; i++) {
     SpriteInstance* pSprInst = g_spriteInstances[i];
     const int textureId = pSprInst->pSprite->textureId;
@@ -683,11 +705,11 @@ void Render() {
     gpuSrvHandle.Offset(textureId * g_cbvDescriptorSize);
 
     g_commandlist->SetGraphicsRootDescriptorTable(0, gpuSrvHandle);
-    g_commandlist->SetGraphicsRootConstantBufferView(1, g_constantbuffer->GetGPUVirtualAddress() + ALIGN * i); // the CB is in slot 1 of the root signature...
+    g_commandlist->SetGraphicsRootConstantBufferView(1, g_constantbuffer->GetGPUVirtualAddress() + ALIGN * (1+i)); // the CB is in slot 1 of the root signature...
     g_commandlist->DrawInstanced(6, 1, 0, 0);
 
     if (g_showBoundingBox) {
-      g_commandlist1->SetGraphicsRootConstantBufferView(1, g_constantbuffer->GetGPUVirtualAddress() + ALIGN * i); // the CB is in slot 1 of the root signature...
+      g_commandlist1->SetGraphicsRootConstantBufferView(1, g_constantbuffer->GetGPUVirtualAddress() + ALIGN * (1+i)); // the CB is in slot 1 of the root signature...
       g_commandlist1->DrawInstanced(12, 1, 0, 0);
     }
   }

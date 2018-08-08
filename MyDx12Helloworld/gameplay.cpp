@@ -1,6 +1,7 @@
 #include "Header.h"
 #include <algorithm>
 
+extern float g_cam_delta_x, g_cam_delta_y;
 extern bool g_showBoundingBox;
 PlayerState g_playerState;
 
@@ -11,6 +12,8 @@ Sprite* g_spr0, *g_spr1, *g_spr2, *g_spr3, *g_sprBrick;
 
 static const float GRAVITY = -480.0f;
 static const float VX0 = 132.f, VY0 = 346.0f;
+
+extern PerSceneCBData g_per_scene_cb_data;
 
 // returns direction 0=left 1=right 2=up 3=down -1=no collision
 int SpriteInstance::Collide(SpriteInstance* other, float* new_x, float* new_y) {
@@ -143,12 +146,15 @@ void OnKeyDown(WPARAM wParam, LPARAM lParam) {
   //  g_dy += 1; break;
   case VK_LEFT: case 'a':
     g_playerState.facing = -1;
+    g_playerState.is_left_pressed = true;
     g_dx -= 1; break;
   case VK_RIGHT: case 'd':
     g_playerState.facing = 1;
+    g_playerState.is_right_pressed = true;
     g_dx += 1; break;
   case 'Z':
     g_playerState.Jump(370.0f);
+    g_playerState.is_jump_pressed = true;
     break;
   case VK_ESCAPE:
     PostQuitMessage(0);
@@ -169,9 +175,14 @@ void OnKeyUp(WPARAM wParam, LPARAM lParam) {
   case VK_UP: case 'w':
     g_dy -= 1; break;
   case VK_LEFT: case 'a':
+    g_playerState.is_left_pressed = false;
     g_dx += 1; break;
   case VK_RIGHT: case 'd':
+    g_playerState.is_right_pressed = false;
     g_dx -= 1; break;
+  case 'Z':
+    g_playerState.is_jump_pressed = false;
+    break;
   }
 }
 
@@ -260,6 +271,29 @@ void GameplayUpdate() {
           }
         }
       }
+    }
+
+    // Camera Effects
+    {
+      if (g_playerState.is_left_pressed) g_cam_delta_x += 0.1f;
+      if (g_playerState.is_right_pressed) g_cam_delta_x -= 0.1f;
+      if (g_playerState.is_jump_pressed) g_cam_delta_y += 0.13f;
+
+      g_cam_delta_x *= 0.95f;
+      g_cam_delta_y *= 0.95f;
+
+      // Update view matrix
+
+      // View matrix
+      DirectX::XMVECTOR eye, target, up;
+      eye.m128_f32[0] = g_cam_delta_x;
+      eye.m128_f32[1] = g_cam_delta_y;
+      eye.m128_f32[2] = -15;
+      up.m128_f32[0] = 0;
+      up.m128_f32[1] = 1;
+      up.m128_f32[2] = 0;
+      ZeroMemory(&target, sizeof(target));
+      g_per_scene_cb_data.view = DirectX::XMMatrixLookAtLH(eye, target, up);
     }
   }
 

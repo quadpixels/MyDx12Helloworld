@@ -15,8 +15,14 @@ struct PSInput
   float2 uv : TEXCOORD;
 };
 
+cbuffer PerSceneCB : register(b1)
+{
+  float4x4 view;
+  float4x4 projection;
+}
+
 // Add this: NULL error
-cbuffer ObjectConstantBuffer : register(b0)
+cbuffer PerObjectCB : register(b0)
 {
   float x, y;
   float w, h;
@@ -31,11 +37,15 @@ PSInput VSMain(float4 position : POSITION, float4 uv : TEXCOORD)
 {
   PSInput result;
   result.position.z = 0.0f;
-  float half_h = h / win_h * 2.0f;
-  float half_w = w / win_w * 2.0f;
+  float min_wh = min(win_h, win_w);
+  float half_h = h / 100;
+  float half_w = w / 100;
   result.position = mul(orientation, position)  // Unit square
     * float4(half_w, half_h, 1.0f, 1.0f) // Aspect ratio correction
-    + float4(x / (win_w / 2), y / (win_h / 2), 0, 0); // Translation
+    + float4(x / 100, y / 100, 0, 0); // Translation
+
+  result.position = mul(projection, mul(view, result.position));
+
   result.uv = uv.xy;
 
   return result;
