@@ -1,5 +1,6 @@
 #pragma once
 #include <vector>
+#include <queue>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN             // Exclude rarely-used stuff from Windows headers.
@@ -22,6 +23,9 @@ public:
 
 class PlayerState {
 public:
+  PlayerState() {
+    x = y = vx = vy = 0;
+  }
   float x, y, vx, vy;
   int facing; // 1 or -1
   void UpdateGravity(float secs);
@@ -46,9 +50,10 @@ public:
   virtual int Collide(SpriteInstance* other, float* new_x, float* new_y);
 };
 
-class PlayerInstance : public SpriteInstance {
+class ActorInstance : public SpriteInstance {
 public:
-  PlayerInstance(float _x, float _y, float _w, float _h, float collx, float colly, float collw, float collh, Sprite* _spr) :
+  bool is_player;
+  ActorInstance(float _x, float _y, float _w, float _h, float collx, float colly, float collw, float collh, Sprite* _spr) :
     SpriteInstance(_x, _y, _w, _h, _spr) {
     coll_rect_center_x = collx;
     coll_rect_center_y = colly;
@@ -58,6 +63,28 @@ public:
   float coll_rect_w, coll_rect_h;
   float coll_rect_center_x, coll_rect_center_y; // Relative to location's X Y
   SpriteInstance GetCollisionShape();
+};
+
+class FollowerInstance : public ActorInstance {
+public:
+  ActorInstance * subject;
+  FollowerInstance(float _x, float _y, float _w, float _h, float collx, float colly, float collw, float collh, Sprite* _spr) :
+    ActorInstance(_x, _y, _w, _h, collx, colly, collw, collh, _spr) {
+    subject = NULL;
+  }
+  std::queue<std::pair<float, float> > historical_pos;
+  const static int HISTORY_LEN = 30;
+
+  virtual void Update(float secs);
+  void StartFollowing(ActorInstance* who);
+};
+
+class PlayerInstance : public ActorInstance {
+public:
+  PlayerInstance(float _x, float _y, float _w, float _h, float collx, float colly, float collw, float collh, Sprite* _spr) :
+    ActorInstance(_x, _y, _w, _h, collx, colly, collw, collh, _spr) { }
+  void AddFollower(FollowerInstance* f);
+  std::vector<FollowerInstance*> followers;
 };
 
 class WallInstance : public SpriteInstance {
@@ -78,6 +105,15 @@ public:
   }
   bool Demised() { return collision_count >= COLLISIONS_MAX; }
   virtual void Update(float secs);
+};
+
+class ItemInstance : public SpriteInstance {
+public:
+  ItemInstance(float _x, float _y, float _w, float _h, Sprite* _spr) :
+    SpriteInstance(_x, _y, _w, _h, _spr) {
+
+  }
+  virtual void Update(float secs); // Will rotate around Z axis
 };
 
 void PopulateDummy();

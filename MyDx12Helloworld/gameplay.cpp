@@ -1,14 +1,18 @@
 #include "Header.h"
 #include <algorithm>
+#include <set>
+#include <vector>
 
 extern float g_cam_delta_x, g_cam_delta_y;
 extern bool g_showBoundingBox;
 PlayerState g_playerState;
+PlayerInstance* g_player;
 
 std::vector<SpriteInstance*> g_spriteInstances;
 char g_dx, g_dy;
 extern int WIN_W, WIN_H;
-Sprite* g_spr0, *g_spr1, *g_spr2, *g_spr3, *g_sprBrick;
+Sprite* g_spr0, *g_spr1, *g_spr2, *g_spr3, *g_sprBrick, *g_spr4;
+extern float g_cam_focus_x, g_cam_focus_y;
 
 static const float GRAVITY = -480.0f;
 static const float VX0 = 132.f, VY0 = 346.0f;
@@ -79,7 +83,7 @@ int SpriteInstance::Collide(SpriteInstance* other, float* new_x, float* new_y) {
 }
 
 PlayerInstance* GetPlayer() { 
-  return dynamic_cast<PlayerInstance*>(g_spriteInstances[0]);
+  return g_player;
 }
 
 void PopulateDummy() {
@@ -88,38 +92,51 @@ void PopulateDummy() {
   g_spr2 = new Sprite(2);
   g_spr3 = new Sprite(3);
   g_sprBrick = new Sprite(4);
+  g_spr4 = new Sprite(5);
   //SpriteInstance* i0 = new SpriteInstance(0,       0, 100, 100, g_spr0);
   //SpriteInstance* i1 = new SpriteInstance(-100.0f, 0, 100, 100, g_spr1);
   //SpriteInstance* iPlayer = new SpriteInstance(-200.0f, 0, 100, 100, g_spr2);
-  PlayerInstance* iPlayer = new PlayerInstance(-200.0f, 0, 100, 100, 0, 0, 75, 100, g_spr2);
+  g_player = new PlayerInstance(-200.0f, 0, 100, 100, 0, 0, 75, 100, g_spr2);
 
-  g_spriteInstances.push_back(iPlayer);
   //g_spriteInstances.push_back(i1);
   //g_spriteInstances.push_back(i0);
 
   const std::vector<std::vector<char> > stupidMap = {
-    { 1,1,1,1,1,1,1,1 },
-    { 1,0,0,0,0,0,0,1 },
-    { 1,0,0,0,0,0,0,1 },
-    { 1,0,0,0,0,1,0,1 },
-    { 1,0,0,0,1,1,0,1 },
-    { 1,1,1,1,1,1,1,1 },
+    { 1,1,1,1,1,1,1,1,1,1,1,1,1 },
+    { 1,0,0,0,0,0,0,3,0,3,0,3,1 },
+    { 1,0,0,0,0,0,0,1,1,1,0,1,1 },
+    { 1,2,2,0,0,1,0,1,0,1,0,0,1 },
+    { 1,2,2,0,1,1,0,1,0,1,1,3,1 },
+    { 1,1,1,1,1,1,1,1,0,1,1,1,1 },
   };
   const int H = int(stupidMap.size()), W = int(stupidMap[0].size());
   const int L = 100;
   for (int y = 0; y < H; y++) {
     for (int x = 0; x < W; x++) {
       char elt = stupidMap[y][x];
-      if (elt) {
-        float px = (-W * 0.5f + x) * L, py = (H * 0.5f - y) * L;
+      float px = (-W * 0.5f + x) * L, py = (H * 0.5f - y) * L;
+      switch (elt) {
+      case 1: {
         g_spriteInstances.push_back(new WallInstance(px, py, L, L, g_sprBrick));
+        break;
+      }
+      case 2: {
+        g_spriteInstances.push_back(new ItemInstance(px, py, 60, 60, g_spr3));
+        printf("item at %g,%g\n", px, py);
+        break;
+      }
+      case 3: {
+        g_spriteInstances.push_back(new FollowerInstance(px, py, 70, 70, 0, 0, 70, 70, g_spr4));
+      }
       }
     }
   }
+
+  g_spriteInstances.push_back(g_player);
 }
 
 void LaunchProjectile() {
-  SpriteInstance* pSprInst = g_spriteInstances[0];
+  SpriteInstance* pSprInst = g_player;
   float x = pSprInst->x - 25.0f;
   float y = pSprInst->y + 25.0f;
 
@@ -219,15 +236,22 @@ void GameplayUpdate() {
   g_playerState.UpdateGravity(dt);
 
   PlayerInstance* pPlayer = GetPlayer();
-  SpriteInstance playerCollider = pPlayer->GetCollisionShape();
   pPlayer->x = g_playerState.x;
   pPlayer->y = g_playerState.y;
+  SpriteInstance playerCollider = pPlayer->GetCollisionShape();
+
+  std::set<ItemInstance*> victims;
+  victims.clear();
 
   // Collision Detection and Resolve
   // Collide player with all walls
   {
     const float w = pPlayer->w, h = pPlayer->h;
     for (SpriteInstance* p : g_spriteInstances) {
+
+      ItemInstance* ii = NULL;
+      FollowerInstance* fi = NULL;
+
       if (dynamic_cast<WallInstance*>(p)) {
         float new_x, new_y;
         int dir = p->Collide(&playerCollider, &new_x, &new_y);
@@ -240,6 +264,16 @@ void GameplayUpdate() {
         if (dir == 2) {
           if (g_playerState.vy < 0)
             g_playerState.vy = 0;
+        }
+      } else if ((ii = dynamic_cast<ItemInstance*>(p)) != NULL) {
+        if (int blah = ii->Collide(&playerCollider, NULL, NULL) != -1) {
+          victims.insert(ii);
+          printf("Erasing a sprite @ (%g,%g); player is at (%g,%g) push=%d!\n", ii->x, ii->y, pPlayer->x, pPlayer->y, blah);
+        }
+      }
+      else if ((fi = dynamic_cast<FollowerInstance*>(p)) != NULL) {
+        if (int blah = fi->Collide(&playerCollider, NULL, NULL) != -1) {
+          pPlayer->AddFollower(fi);
         }
       }
     }
@@ -286,14 +320,25 @@ void GameplayUpdate() {
 
       // View matrix
       DirectX::XMVECTOR eye, target, up;
-      eye.m128_f32[0] = g_cam_delta_x;
-      eye.m128_f32[1] = g_cam_delta_y;
-      eye.m128_f32[2] = -15;
+      eye.m128_f32[0] = g_cam_delta_x + g_cam_focus_x / 100.0f;
+      eye.m128_f32[1] = g_cam_delta_y + g_cam_focus_y / 100.0f;
+      eye.m128_f32[2] = -10;
       up.m128_f32[0] = 0;
       up.m128_f32[1] = 1;
       up.m128_f32[2] = 0;
-      ZeroMemory(&target, sizeof(target));
+      target.m128_f32[0] = g_cam_focus_x / 100.0f;
+      target.m128_f32[1] = g_cam_focus_y / 100.0f;
+      target.m128_f32[2] = 0;
       g_per_scene_cb_data.view = DirectX::XMMatrixLookAtLH(eye, target, up);
+
+      // Chase camera
+      {
+        const float px = g_playerState.x, py = g_playerState.y,
+          cx = g_cam_focus_x, cy = g_cam_focus_y;
+        const float L = 0.05f;
+        g_cam_focus_x = L * px + (1.0f - L) * cx;
+        g_cam_focus_y = L * py + (1.0f - L) * cy;
+      }
     }
   }
 
@@ -328,12 +373,17 @@ void GameplayUpdate() {
   for (SpriteInstance* si : g_spriteInstances) {
     ProjectileInstance* pi = dynamic_cast<ProjectileInstance*>(si);
     if (pi && pi->Demised()) {
-      delete pi;
-      continue;
+      delete pi; continue;
     }
 
+    ItemInstance* ii = dynamic_cast<ItemInstance*>(si);
+    if (victims.find(ii) != victims.end()) {
+      delete ii;
+      continue;
+    }
     next_sprites.push_back(si);
   }
+
   g_spriteInstances = next_sprites;
 }
 
@@ -349,8 +399,60 @@ void PlayerState::Jump(float vy) {
 }
 
 // ==============================
-SpriteInstance PlayerInstance::GetCollisionShape() {
+SpriteInstance ActorInstance::GetCollisionShape() {
   float dx = x + coll_rect_center_x;
   float dy = y + coll_rect_center_y;
   return SpriteInstance(dx, dy, coll_rect_w, coll_rect_h, NULL);
+}
+
+// ==============================
+void PlayerInstance::AddFollower(FollowerInstance* f) {
+  if (f->subject != NULL) return;
+
+  if (followers.empty()) {
+    f->StartFollowing(this);
+  }
+  else {
+    f->StartFollowing(followers.back());
+  }
+
+
+
+  followers.push_back(f);
+  printf("Added a follower\n");
+}
+
+// ==============================
+void FollowerInstance::Update(float secs) {
+  if (subject != NULL) {
+    std::pair<float, float> p = std::make_pair(subject->x, subject->y);
+    historical_pos.push(p);
+    while (historical_pos.size() >= HISTORY_LEN) {
+      p = historical_pos.front();
+      historical_pos.pop();
+
+      float old_x = x, old_y = y;
+
+      this->x = p.first;
+      this->y = p.second;
+    }
+  }
+}
+
+// Start following and pre-fill the historical position buffer
+void FollowerInstance::StartFollowing(ActorInstance* who) {
+  subject = who;
+  while (historical_pos.empty() == false) historical_pos.pop();
+  float x0 = this->x, x1 = who->x, y0 = this->y, y1 = who->y;
+  for (int i = 0; i < HISTORY_LEN; i++) {
+    float t = (i + 1) * 1.0 / HISTORY_LEN;
+    float xx = x0 * (1.0f - t) + x1 * t,
+      yy = y0 * (1.0f - t) + y1 * t;
+    historical_pos.push(std::make_pair(xx, yy));
+  }
+}
+
+// ==============================
+void ItemInstance::Update(float secs) {
+  orientation = orientation * DirectX::XMMatrixRotationZ(0.1f);
 }

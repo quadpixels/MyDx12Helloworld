@@ -56,6 +56,7 @@ const wchar_t* texNames[] = {
   L"pic3_small.png", 
   L"projectile.png",
   L"brick.png",
+  L"pic4.png",
 };
 const int NUM_TEXTURES = sizeof(texNames) / sizeof(texNames[0]);
 
@@ -69,6 +70,7 @@ struct VertexAndColor {
 };
 
 PerSceneCBData g_per_scene_cb_data;
+float g_cam_focus_x, g_cam_focus_y;
 
 struct ConstantBufferData {
   ConstantBufferData() {
@@ -302,7 +304,21 @@ void InitAssets() {
   psoDesc.PS = CD3DX12_SHADER_BYTECODE(g_PS);
   psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
   psoDesc.RasterizerState.DepthClipEnable = FALSE;
-  psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+  
+  psoDesc.BlendState.RenderTarget[0].BlendEnable = TRUE;
+
+  D3D12_RENDER_TARGET_BLEND_DESC rtbd;
+  ZeroMemory(&rtbd, sizeof(rtbd));
+  rtbd.BlendEnable = true;
+  rtbd.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+  rtbd.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+  rtbd.BlendOp = D3D12_BLEND_OP_ADD;
+  rtbd.SrcBlendAlpha = D3D12_BLEND_SRC_ALPHA;
+  rtbd.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+  rtbd.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+  rtbd.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+  psoDesc.BlendState.RenderTarget[0] = rtbd;
+
   psoDesc.DepthStencilState.DepthEnable = FALSE;
   psoDesc.DepthStencilState.StencilEnable = FALSE;
   psoDesc.SampleMask = UINT_MAX;
@@ -485,7 +501,7 @@ void InitConstantBuffer() {
   CE(g_device->CreateCommittedResource(
     &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
     D3D12_HEAP_FLAG_NONE,
-    &CD3DX12_RESOURCE_DESC::Buffer(1024 * 64),
+    &CD3DX12_RESOURCE_DESC::Buffer(2048 * 64),
     D3D12_RESOURCE_STATE_GENERIC_READ,
     nullptr,
     IID_PPV_ARGS(&g_constantbuffer)));
@@ -656,6 +672,10 @@ void Render() {
   g_commandlist->RSSetScissorRects(1, &g_scissorrect);
   g_commandlist1->RSSetViewports(1, &g_viewport);
   g_commandlist1->RSSetScissorRects(1, &g_scissorrect);
+
+  // Blending
+  float blend_factor[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+  g_commandlist->OMSetBlendFactor(blend_factor);
 
   // Draw stuff
 
