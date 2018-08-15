@@ -57,6 +57,7 @@ const wchar_t* texNames[] = {
   L"projectile.png",
   L"brick.png",
   L"pic4.png",
+  L"pic5.png",
 };
 const int NUM_TEXTURES = sizeof(texNames) / sizeof(texNames[0]);
 

@@ -12,6 +12,7 @@ std::vector<SpriteInstance*> g_spriteInstances;
 char g_dx, g_dy;
 extern int WIN_W, WIN_H;
 Sprite* g_spr0, *g_spr1, *g_spr2, *g_spr3, *g_sprBrick, *g_spr4;
+Sprite* g_spr5;
 extern float g_cam_focus_x, g_cam_focus_y;
 
 static const float GRAVITY = -480.0f;
@@ -93,6 +94,7 @@ void PopulateDummy() {
   g_spr3 = new Sprite(3);
   g_sprBrick = new Sprite(4);
   g_spr4 = new Sprite(5);
+  g_spr5 = new Sprite(6);
   //SpriteInstance* i0 = new SpriteInstance(0,       0, 100, 100, g_spr0);
   //SpriteInstance* i1 = new SpriteInstance(-100.0f, 0, 100, 100, g_spr1);
   //SpriteInstance* iPlayer = new SpriteInstance(-200.0f, 0, 100, 100, g_spr2);
@@ -102,15 +104,19 @@ void PopulateDummy() {
   //g_spriteInstances.push_back(i0);
 
   const std::vector<std::vector<char> > stupidMap = {
-    { 1,1,1,1,1,1,1,1,1,1,1,1,1 },
+    { 0,0,0,0,0,0,0,0,1,1,1,1,0 },
+    { 1,1,1,1,1,1,1,1,1,0,0,1,1 },
     { 1,0,0,0,0,0,0,3,0,3,0,3,1 },
-    { 1,0,0,0,0,0,0,1,1,1,0,1,1 },
-    { 1,2,2,0,0,1,0,1,0,1,0,0,1 },
+    { 1,0,0,0,0,0,0,1,1,0,0,1,1 },
+    { 1,2,2,0,4,1,0,1,1,1,0,0,1 },
     { 1,2,2,0,1,1,0,1,0,1,1,3,1 },
     { 1,1,1,1,1,1,1,1,0,1,1,1,1 },
   };
   const int H = int(stupidMap.size()), W = int(stupidMap[0].size());
   const int L = 100;
+
+  std::set<FollowerInstance*> followers;
+
   for (int y = 0; y < H; y++) {
     for (int x = 0; x < W; x++) {
       char elt = stupidMap[y][x];
@@ -126,12 +132,18 @@ void PopulateDummy() {
         break;
       }
       case 3: {
-        g_spriteInstances.push_back(new FollowerInstance(px, py, 70, 70, 0, 0, 70, 70, g_spr4));
+        followers.insert(new FollowerInstance(px, py, 50, 50, 0, 0, 50, 50, g_spr4));
+        break;
+      }
+      case 4: {
+        g_spriteInstances.push_back(new DestinationInstance(px, py, 100, 100, g_spr5));
+        break;
       }
       }
     }
   }
 
+  for (FollowerInstance* fi : followers) g_spriteInstances.push_back(fi);
   g_spriteInstances.push_back(g_player);
 }
 
@@ -273,7 +285,8 @@ void GameplayUpdate() {
       }
       else if ((fi = dynamic_cast<FollowerInstance*>(p)) != NULL) {
         if (int blah = fi->Collide(&playerCollider, NULL, NULL) != -1) {
-          pPlayer->AddFollower(fi);
+          if (fi->is_done == false)
+            pPlayer->AddFollower(fi);
         }
       }
     }
@@ -306,6 +319,36 @@ void GameplayUpdate() {
         }
       }
     }
+
+    // Collide followers with destinations
+    if (g_playerState.follower_complete_cooldown <= 0)
+    {
+      std::set<FollowerInstance*> followers;
+      std::set<DestinationInstance*> dests;
+      for (SpriteInstance* sp : g_spriteInstances) {
+        FollowerInstance* fi = dynamic_cast<FollowerInstance*>(sp);
+        if (fi) {
+          followers.insert(fi);
+        }
+        DestinationInstance* di = dynamic_cast<DestinationInstance*>(sp);
+        if (di) {
+          dests.insert(di);
+        }
+      }
+      for (FollowerInstance* fi : followers) {
+        if (fi->is_done == false) {
+          for (DestinationInstance* di : dests) {
+            float new_x, new_y;
+            if (int blah = di->Collide(fi, &new_x, &new_y) != -1) {
+              fi->CompleteFollowing();
+              g_playerState.follower_complete_cooldown = 0.2;
+              goto DONE_FOLLOWER_COMPLETE;
+            }
+          }
+        }
+      }
+    }
+    DONE_FOLLOWER_COMPLETE:
 
     // Camera Effects
     {
@@ -392,6 +435,10 @@ void GameplayUpdate() {
 void PlayerState::UpdateGravity(float secs) {
   vy += GRAVITY * secs;
   x += vx * secs; y += vy * secs;
+
+  follower_complete_cooldown -= secs;
+  if (follower_complete_cooldown < 0)
+    follower_complete_cooldown = 0;
 }
 
 void PlayerState::Jump(float vy) {
@@ -409,16 +456,9 @@ SpriteInstance ActorInstance::GetCollisionShape() {
 void PlayerInstance::AddFollower(FollowerInstance* f) {
   if (f->subject != NULL) return;
 
-  if (followers.empty()) {
-    f->StartFollowing(this);
-  }
-  else {
-    f->StartFollowing(followers.back());
-  }
+  f->StartFollowing(this);
 
-
-
-  followers.push_back(f);
+  followers.insert(f);
   printf("Added a follower\n");
 }
 
@@ -427,11 +467,18 @@ void FollowerInstance::Update(float secs) {
   if (subject != NULL) {
     std::pair<float, float> p = std::make_pair(subject->x, subject->y);
     historical_pos.push(p);
-    while (historical_pos.size() >= HISTORY_LEN) {
+    while (historical_pos.size() >= history_len) {
       p = historical_pos.front();
       historical_pos.pop();
 
-      float old_x = x, old_y = y;
+      this->x = p.first;
+      this->y = p.second;
+    }
+  }
+  else {
+    if (historical_pos.size() > 0) {
+      std::pair<float, float> p = historical_pos.front();
+      historical_pos.pop();
 
       this->x = p.first;
       this->y = p.second;
@@ -440,16 +487,25 @@ void FollowerInstance::Update(float secs) {
 }
 
 // Start following and pre-fill the historical position buffer
-void FollowerInstance::StartFollowing(ActorInstance* who) {
+void FollowerInstance::StartFollowing(PlayerInstance* who) {
   subject = who;
+
+  history_len = 30 * (1 + who->followers.size());
+
   while (historical_pos.empty() == false) historical_pos.pop();
   float x0 = this->x, x1 = who->x, y0 = this->y, y1 = who->y;
-  for (int i = 0; i < HISTORY_LEN; i++) {
-    float t = (i + 1) * 1.0 / HISTORY_LEN;
+  for (int i = 0; i < history_len; i++) {
+    float t = (i + 1) * 1.0 / history_len;
     float xx = x0 * (1.0f - t) + x1 * t,
       yy = y0 * (1.0f - t) + y1 * t;
     historical_pos.push(std::make_pair(xx, yy));
   }
+}
+
+void FollowerInstance::CompleteFollowing() {
+  subject->followers.erase(this);
+  subject = NULL;
+  is_done = true;
 }
 
 // ==============================

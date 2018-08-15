@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <queue>
+#include <set>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN             // Exclude rarely-used stuff from Windows headers.
@@ -33,6 +34,8 @@ public:
   bool is_left_pressed;
   bool is_right_pressed;
   bool is_jump_pressed;
+
+  float follower_complete_cooldown; // seconds
 };
 
 class SpriteInstance {
@@ -65,18 +68,23 @@ public:
   SpriteInstance GetCollisionShape();
 };
 
+class PlayerInstance;
+
 class FollowerInstance : public ActorInstance {
 public:
-  ActorInstance * subject;
+  PlayerInstance * subject;
+  bool is_done;
   FollowerInstance(float _x, float _y, float _w, float _h, float collx, float colly, float collw, float collh, Sprite* _spr) :
     ActorInstance(_x, _y, _w, _h, collx, colly, collw, collh, _spr) {
     subject = NULL;
+    is_done = false;
   }
   std::queue<std::pair<float, float> > historical_pos;
-  const static int HISTORY_LEN = 30;
+  int history_len;
 
   virtual void Update(float secs);
-  void StartFollowing(ActorInstance* who);
+  void StartFollowing(PlayerInstance* who);
+  void CompleteFollowing();
 };
 
 class PlayerInstance : public ActorInstance {
@@ -84,7 +92,7 @@ public:
   PlayerInstance(float _x, float _y, float _w, float _h, float collx, float colly, float collw, float collh, Sprite* _spr) :
     ActorInstance(_x, _y, _w, _h, collx, colly, collw, collh, _spr) { }
   void AddFollower(FollowerInstance* f);
-  std::vector<FollowerInstance*> followers;
+  std::set<FollowerInstance*> followers;
 };
 
 class WallInstance : public SpriteInstance {
@@ -114,6 +122,15 @@ public:
 
   }
   virtual void Update(float secs); // Will rotate around Z axis
+};
+
+// This is where followers go
+class DestinationInstance : public SpriteInstance {
+public:
+  DestinationInstance(float _x, float _y, float _w, float _h, Sprite* _spr) :
+    SpriteInstance(_x, _y, _w, _h, _spr) {
+
+  }
 };
 
 void PopulateDummy();
