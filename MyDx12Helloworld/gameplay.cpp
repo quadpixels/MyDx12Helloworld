@@ -17,6 +17,7 @@ extern float g_cam_focus_x, g_cam_focus_y;
 
 static const float GRAVITY = -480.0f;
 static const float VX0 = 132.f, VY0 = 346.0f;
+static float g_time_scale = 2.0f;
 
 extern PerSceneCBData g_per_scene_cb_data;
 
@@ -176,11 +177,11 @@ void OnKeyDown(WPARAM wParam, LPARAM lParam) {
   case VK_LEFT: case 'a':
     g_playerState.facing = -1;
     g_playerState.is_left_pressed = true;
-    g_dx -= 1; break;
+    g_dx -= 1 * g_time_scale; break;
   case VK_RIGHT: case 'd':
     g_playerState.facing = 1;
     g_playerState.is_right_pressed = true;
-    g_dx += 1; break;
+    g_dx += 1 * g_time_scale; break;
   case 'Z':
     g_playerState.Jump(370.0f);
     g_playerState.is_jump_pressed = true;
@@ -200,15 +201,15 @@ void OnKeyDown(WPARAM wParam, LPARAM lParam) {
 void OnKeyUp(WPARAM wParam, LPARAM lParam) {
   switch (wParam) {
   case VK_DOWN: case 's':
-    g_dy += 1; break;
+    g_dy += 1 * g_time_scale; break;
   case VK_UP: case 'w':
-    g_dy -= 1; break;
+    g_dy -= 1 * g_time_scale; break;
   case VK_LEFT: case 'a':
     g_playerState.is_left_pressed = false;
-    g_dx += 1; break;
+    g_dx += 1 * g_time_scale; break;
   case VK_RIGHT: case 'd':
     g_playerState.is_right_pressed = false;
-    g_dx -= 1; break;
+    g_dx -= 1 * g_time_scale; break;
   case 'Z':
     g_playerState.is_jump_pressed = false;
     break;
@@ -216,8 +217,9 @@ void OnKeyUp(WPARAM wParam, LPARAM lParam) {
 }
 
 void ProjectileInstance::Update(float secs) {
-  vy += GRAVITY * secs;
-  x += vx * secs; y += vy * secs;
+  const float dt = secs * g_time_scale;
+  vy += GRAVITY * dt;
+  x += vx * dt; y += vy * dt;
   orientation *= DirectX::XMMatrixRotationZ(angular_velocity);
   if (y < -WIN_H / 2) {
     vy = -vy * 0.6f;
@@ -433,10 +435,11 @@ void GameplayUpdate() {
 // ==============================
 
 void PlayerState::UpdateGravity(float secs) {
-  vy += GRAVITY * secs;
-  x += vx * secs; y += vy * secs;
+  const float dt = secs * g_time_scale;
+  vy += GRAVITY * dt;
+  x += vx * dt; y += vy * dt;
 
-  follower_complete_cooldown -= secs;
+  follower_complete_cooldown -= dt;
   if (follower_complete_cooldown < 0)
     follower_complete_cooldown = 0;
 }
@@ -464,6 +467,7 @@ void PlayerInstance::AddFollower(FollowerInstance* f) {
 
 // ==============================
 void FollowerInstance::Update(float secs) {
+  const float dt = secs * g_time_scale;
   if (subject != NULL) {
     std::pair<float, float> p = std::make_pair(subject->x, subject->y);
     historical_pos.push(p);
@@ -506,6 +510,15 @@ void FollowerInstance::CompleteFollowing() {
   subject->followers.erase(this);
   subject = NULL;
   is_done = true;
+
+  const int leftover_frames = rand() % 3 + 3;
+  std::vector<std::pair<float, float> > temp;
+  for (int i = 0; i < leftover_frames && historical_pos.empty() == false; i++) {
+    temp.push_back(historical_pos.front());
+    historical_pos.pop();
+  }
+  while (historical_pos.empty() == false) historical_pos.pop();
+  for (const std::pair<float, float>& x : temp) historical_pos.push(x);
 }
 
 // ==============================
