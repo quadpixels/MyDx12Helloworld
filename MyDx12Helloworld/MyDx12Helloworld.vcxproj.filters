@@ -52,6 +52,12 @@
     <CustomBuild Include="shader_polygon.hlsl">
       <Filter>Resource Files</Filter>
     </CustomBuild>
+    <CustomBuild Include="shaders_combine.hlsl">
+      <Filter>Resource Files</Filter>
+    </CustomBuild>
+    <CustomBuild Include="shaders_mask.hlsl">
+      <Filter>Resource Files</Filter>
+    </CustomBuild>
   </ItemGroup>
   <ItemGroup>
     <Image Include="pic1.png">

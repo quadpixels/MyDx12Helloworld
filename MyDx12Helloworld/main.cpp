@@ -22,16 +22,22 @@ IDXGISwapChain3* g_swapchain;
 IDXGIFactory4* g_factory;
 ID3D12DescriptorHeap* g_descriptorheap;
 ID3D12Resource* g_rendertargets[FrameCount];
-ID3D12Resource* g_scattertargets;
+ID3D12Resource* g_maincanvas;
+ID3D12Resource* g_scatterlight;
+
 ID3D12CommandAllocator* g_commandallocator; // 1 allocator for <= 1 "recording" cmd lists
 ID3D12CommandAllocator* g_commandallocator_bb;
 ID3D12CommandAllocator* g_commandallocator_copier;
 ID3D12RootSignature* g_rootsignature;
 ID3D12RootSignature* g_rootsignature_bb;
 ID3D12RootSignature* g_rootsignature_copier;
+ID3D12RootSignature* g_rootsignature_combine;
 ID3D12PipelineState* g_pipelinestate;
 ID3D12PipelineState* g_pipelinestate_bb;
 ID3D12PipelineState* g_pipelinestate_copier;
+ID3D12PipelineState* g_pipelinestate_lightmask;
+ID3D12PipelineState* g_pipelinestate_combine;
+
 ID3D12GraphicsCommandList* g_commandlist;
 ID3D12GraphicsCommandList* g_commandlist_bb;
 ID3D12GraphicsCommandList* g_commandlist_copier;
@@ -43,9 +49,13 @@ CD3DX12_RECT g_scissorrect;
 
 ID3DBlob* g_VS, *g_PS;
 ID3DBlob* g_VS1, *g_PS1, *g_GS1;
-ID3D12Resource* g_vertexbuffer;
+ID3DBlob* g_VS2, *g_PS2;
+ID3DBlob *g_VS_combine, *g_PS_combine;
+ID3D12Resource* g_vb_unitsquare;
 ID3D12Resource* g_vertexbuffer1;
-D3D12_VERTEX_BUFFER_VIEW g_vertexbufferview;
+ID3D12Resource* g_vb_fsquad; // FS Quad = Full Screen Quad
+D3D12_VERTEX_BUFFER_VIEW g_vbv_unitsquare;
+D3D12_VERTEX_BUFFER_VIEW g_vbv_fsquad;
 D3D12_VERTEX_BUFFER_VIEW g_vertexbufferview1;
 ID3D12Resource* g_texture;
 ID3D12DescriptorHeap* g_srvheap;
@@ -65,6 +75,7 @@ const wchar_t* texNames[] = {
   L"pic5.png",
 };
 const int NUM_TEXTURES = sizeof(texNames) / sizeof(texNames[0]);
+const int NUM_SRVS = 2;
 
 extern std::vector<SpriteInstance*> g_spriteInstances;
 
@@ -190,13 +201,15 @@ void InitSwapChain() {
 
 void InitDescriptorHeap() {
   D3D12_DESCRIPTOR_HEAP_DESC desc = {};
-  desc.NumDescriptors = FrameCount + 1;
+  // Why are there 2 descriptors? reason:
+  // [ 2xSwapChainTarget ] [ scatter canvas ] [ scatter light ]
+  desc.NumDescriptors = FrameCount + 2;
   desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
   desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
   CE(g_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&g_descriptorheap)));
 
   D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
-  srvHeapDesc.NumDescriptors = NUM_TEXTURES + 1; // +1 for the constant buffer
+  srvHeapDesc.NumDescriptors = NUM_TEXTURES + 3; // +1 for the constant buffer, +2 for the two SRVs
   srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   CE(g_device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&g_srvheap)));
@@ -210,36 +223,55 @@ void InitDescriptorHeap() {
     g_device->CreateRenderTargetView(g_rendertargets[i], nullptr, rtvHandle);
     rtvHandle.Offset(1, g_rtvDescriptorSize);
   }
+  g_rendertargets[0]->SetName(L"Render Target Frame 0");
+  g_rendertargets[1]->SetName(L"Render Target Frame 1");
 
-  // create the rt for light scatter
+  // create the rt for light scatter (main canvas & lights)
+  D3D12_RESOURCE_DESC textureDesc = {};
+  // Describe and create a Texture2D.
+  textureDesc.MipLevels = 1;
+  textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+  textureDesc.Width = WIN_W;
+  textureDesc.Height = WIN_H;
+  textureDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+  textureDesc.DepthOrArraySize = 1;
+  textureDesc.SampleDesc.Count = 1;
+  textureDesc.SampleDesc.Quality = 0;
+  textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+
   {
-    D3D12_RESOURCE_DESC textureDesc = {};
-    // Describe and create a Texture2D.
-    textureDesc.MipLevels = 1;
-    textureDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    textureDesc.Width = WIN_W;
-    textureDesc.Height = WIN_H;
-    textureDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-    textureDesc.DepthOrArraySize = 1;
-    textureDesc.SampleDesc.Count = 1;
-    textureDesc.SampleDesc.Quality = 0;
-    textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
 
     float c[] = { 1.0f, 1.0f, 0.8f, 1.0f };
     CD3DX12_CLEAR_VALUE clear_value(DXGI_FORMAT_R8G8B8A8_UNORM, c);
-    
+
     HRESULT result = g_device->CreateCommittedResource(
       &(CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT)),
       D3D12_HEAP_FLAG_NONE,
       &textureDesc,
-      D3D12_RESOURCE_STATE_COPY_SOURCE,
+      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
       &clear_value,
-      IID_PPV_ARGS(&g_scattertargets)
+      IID_PPV_ARGS(&g_maincanvas)
     );
+    g_maincanvas->SetName(L"Main canvas");
     CE(result);
+    g_device->CreateRenderTargetView(g_maincanvas, nullptr, rtvHandle);
+  }
 
-    printf("rtvHandle1.ptr=%p\n", (void*)(rtvHandle.ptr));
-    g_device->CreateRenderTargetView(g_scattertargets, nullptr, rtvHandle);
+  {
+    rtvHandle.Offset(1, g_rtvDescriptorSize);
+    float ones[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    CD3DX12_CLEAR_VALUE cv1(DXGI_FORMAT_R8G8B8A8_UNORM, ones);
+    HRESULT result = g_device->CreateCommittedResource(
+      &(CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT)),
+      D3D12_HEAP_FLAG_NONE,
+      &textureDesc,
+      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+      &cv1,
+      IID_PPV_ARGS(&g_scatterlight)
+    );
+    g_scatterlight->SetName(L"Light map");
+    CE(result);
+    g_device->CreateRenderTargetView(g_scatterlight, nullptr, rtvHandle);
   }
 
   CE(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&g_commandallocator)));
@@ -256,23 +288,19 @@ void InitAssets() {
     rootSrvDescriptor.RegisterSpace = 0;
     rootSrvDescriptor.ShaderRegister = 0;
 
-    CD3DX12_DESCRIPTOR_RANGE1 ranges[1];
+    CD3DX12_DESCRIPTOR_RANGE1 ranges[2];
     ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC); // We have only 1 table: { SRV, SRV, CBV }
-//    ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE);
 
     CD3DX12_ROOT_PARAMETER1 rootParameters[3];
     rootParameters[0].InitAsDescriptorTable(1, &ranges[0], D3D12_SHADER_VISIBILITY_PIXEL);
     rootParameters[1].InitAsConstantBufferView(0U, 0U, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_VERTEX);
     rootParameters[2].InitAsConstantBufferView(1U, 0U, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_VERTEX);
-//    rootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
-//    rootParameters[1].Descriptor = rootCbvDescriptor;
-//    rootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
 
     D3D12_STATIC_SAMPLER_DESC sampler = {};
     sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
-    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
-    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    sampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
     sampler.MipLODBias = 0;
     sampler.MaxAnisotropy = 4;
     sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
@@ -283,23 +311,51 @@ void InitAssets() {
     sampler.RegisterSpace = 0;
     sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
-    CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc;
-    rootSignatureDesc.Init_1_1(_countof(rootParameters), rootParameters, 1, &sampler,
-      D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+    // Main signature
+    {
+      CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc;
+      rootSignatureDesc.Init_1_1(_countof(rootParameters), rootParameters, 1, &sampler,
+        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
-    ComPtr<ID3DBlob> signature, error;
-    HRESULT x = D3DX12SerializeVersionedRootSignature(&rootSignatureDesc, 
-      D3D_ROOT_SIGNATURE_VERSION_1_1,
-      &signature,
-      &error);
+      ComPtr<ID3DBlob> signature, error;
+      HRESULT x = D3DX12SerializeVersionedRootSignature(&rootSignatureDesc,
+        D3D_ROOT_SIGNATURE_VERSION_1_1,
+        &signature,
+        &error);
 
-    if (signature == nullptr) {
-      printf("ERROR:%s\n", (char*)(error->GetBufferPointer()));
+      if (signature == nullptr) {
+        printf("ERROR:%s\n", (char*)(error->GetBufferPointer()));
+      }
+
+      CE(g_device->CreateRootSignature(0, signature->GetBufferPointer(),
+        signature->GetBufferSize(), IID_PPV_ARGS(&g_rootsignature)));
+      g_rootsignature->SetName(L"g_rootsignature");
     }
 
-    CE(g_device->CreateRootSignature(0, signature->GetBufferPointer(), 
-      signature->GetBufferSize(), IID_PPV_ARGS(&g_rootsignature)));
-    g_rootsignature->SetName(L"g_rootsignature");
+    // Combiner signature
+    {
+      ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE);
+      rootParameters[0].InitAsDescriptorTable(1, &ranges[0], D3D12_SHADER_VISIBILITY_PIXEL);
+
+      //ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE);
+      //rootParameters[1].InitAsDescriptorTable(1, &ranges[1], D3D12_SHADER_VISIBILITY_PIXEL);
+
+      CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc;
+      rootSignatureDesc.Init_1_1(1, rootParameters,
+        1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
+      );
+      ID3DBlob *signature, *error;
+      HRESULT x = D3DX12SerializeVersionedRootSignature(&rootSignatureDesc,
+        D3D_ROOT_SIGNATURE_VERSION_1_1,
+        &signature,
+        &error);
+      if (signature == nullptr) {
+        printf("Error create root signature for combine: %s\n", (char*)(error->GetBufferPointer()));
+      }
+      CE(g_device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(),
+        IID_PPV_ARGS(&g_rootsignature_combine)));
+      g_rootsignature_combine->SetName(L"g_rootsignature_combine");
+    }
   }
 
 #if defined(_DEBUG)
@@ -326,6 +382,20 @@ void InitAssets() {
   CE(D3DCompileFromFile(L"shader_polygon.hlsl", nullptr, nullptr, "GSMain", "gs_5_0", compileFlags, 0, &g_GS1, &error));
   if (error)
     printf("Error compiling GS: %s\n", (char*)error->GetBufferPointer());
+
+  CE(D3DCompileFromFile(L"shaders_mask.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &g_VS2, &error));
+  if (error)
+    printf("Error compiling VS: %s\n", (char*)error->GetBufferPointer());
+  CE(D3DCompileFromFile(L"shaders_mask.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &g_PS2, &error));
+  if (error)
+    printf("Error compiling PS: %s\n", (char*)error->GetBufferPointer());
+
+  CE(D3DCompileFromFile(L"shaders_combine.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &g_VS_combine, &error));
+  if (error)
+    printf("Error compiling VS: %s\n", (char*)error->GetBufferPointer());
+  CE(D3DCompileFromFile(L"shaders_combine.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &g_PS_combine, &error));
+  if (error)
+    printf("Error compiling PS: %s\n", (char*)error->GetBufferPointer());
 
   D3D12_INPUT_ELEMENT_DESC inputElementDescs[] =
   {
@@ -382,8 +452,6 @@ void InitAssets() {
   psoDesc.GS = CD3DX12_SHADER_BYTECODE(g_GS1);
   psoDesc.InputLayout = { inputElementDescs1, _countof(inputElementDescs1) };
   psoDesc.RasterizerState.AntialiasedLineEnable = true;
-  //psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_WIREFRAME;
-  psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
   
   CE(g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_pipelinestate_copier)));
   CE(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, g_commandallocator_copier, g_pipelinestate_copier, IID_PPV_ARGS(&g_commandlist_copier)));
@@ -392,6 +460,20 @@ void InitAssets() {
   CE(g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_pipelinestate_bb)));
   CE(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, g_commandallocator_bb, g_pipelinestate_bb, IID_PPV_ARGS(&g_commandlist_bb)));
 
+  // Disable blending for light mask and combine
+  rtbd.BlendEnable = false;
+  psoDesc.BlendState.RenderTarget[0] = rtbd;
+  psoDesc.VS = CD3DX12_SHADER_BYTECODE(g_VS2);
+  psoDesc.PS = CD3DX12_SHADER_BYTECODE(g_PS2);
+  psoDesc.GS.BytecodeLength = 0;
+  psoDesc.GS.pShaderBytecode = nullptr;
+  psoDesc.InputLayout = { inputElementDescs, _countof(inputElementDescs) };
+  CE(g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_pipelinestate_lightmask)));
+
+  psoDesc.VS = CD3DX12_SHADER_BYTECODE(g_VS_combine);
+  psoDesc.PS = CD3DX12_SHADER_BYTECODE(g_PS_combine);
+  psoDesc.pRootSignature = g_rootsignature_combine;
+  CE(g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_pipelinestate_combine)));
 
   // Create vertex buffer & view
   {
@@ -410,21 +492,52 @@ void InitAssets() {
       &CD3DX12_RESOURCE_DESC::Buffer(sizeof(verts)),
       D3D12_RESOURCE_STATE_GENERIC_READ,
       nullptr,
-      IID_PPV_ARGS(&g_vertexbuffer)
+      IID_PPV_ARGS(&g_vb_unitsquare)
     ));
 
     // Upload
     UINT8* pData;
     CD3DX12_RANGE readRange(0, 0);
-    CE(g_vertexbuffer->Map(0, &readRange, (void**)(&pData)));
+    CE(g_vb_unitsquare->Map(0, &readRange, (void**)(&pData)));
     memcpy(pData, verts, sizeof(verts));
-    g_vertexbuffer->Unmap(0, nullptr);
+    g_vb_unitsquare->Unmap(0, nullptr);
 
-    g_vertexbufferview.BufferLocation = g_vertexbuffer->GetGPUVirtualAddress();
-    g_vertexbufferview.StrideInBytes = sizeof(VertexAndUV);
-    g_vertexbufferview.SizeInBytes = sizeof(verts);
+    g_vbv_unitsquare.BufferLocation = g_vb_unitsquare->GetGPUVirtualAddress();
+    g_vbv_unitsquare.StrideInBytes = sizeof(VertexAndUV);
+    g_vbv_unitsquare.SizeInBytes = sizeof(verts);
   }
 
+  // Create vertex buffer & view for the full-screen quad
+  {
+    VertexAndUV verts[] = {
+      {  1.0f,  1.0f, 0.0f,  1.0f, 0.0f }, //  
+      {  1.0f, -1.0f, 0.0f,  1.0f, 1.0f }, //  +-----------+ UV = (1, 0), NDC=(1, 1)
+      { -1.0f, -1.0f, 0.0f,  0.0f, 1.0f }, //  |           |
+                                           //  |           |
+      { -1.0f, -1.0f, 0.0f,  0.0f, 1.0f }, //  |           |
+      { -1.0f,  1.0f, 0.0f,  0.0f, 0.0f }, //  |           |
+      {  1.0f,  1.0f, 0.0f,  1.0f, 0.0f }, //  +-----------+ UV = (1, 1), NDC=(1,-1)
+    };
+    CE(g_device->CreateCommittedResource(
+      &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+      D3D12_HEAP_FLAG_NONE,
+      &CD3DX12_RESOURCE_DESC::Buffer(sizeof(verts)),
+      D3D12_RESOURCE_STATE_GENERIC_READ,
+      nullptr, IID_PPV_ARGS(&g_vb_fsquad)
+    ));
+
+    // Upload
+    UINT8* pData;
+    CD3DX12_RANGE readRange(0, 0);
+    CE(g_vb_fsquad->Map(0, &readRange, (void**)(&pData)));
+    memcpy(pData, verts, sizeof(verts));
+    g_vb_fsquad->Unmap(0, nullptr);
+
+    g_vbv_fsquad.BufferLocation = g_vb_fsquad->GetGPUVirtualAddress();
+    g_vbv_fsquad.StrideInBytes = sizeof(VertexAndUV);
+    g_vbv_fsquad.SizeInBytes = sizeof(verts);
+  }
+  
   {
     const float EPS = 0.007f;
     VertexAndColor verts[] = { // Treat as trianglez
@@ -466,9 +579,15 @@ void InitAssets() {
   }
 }
 
-void InitTexture() {
+void InitTextureAndSRVs() {
 
   CD3DX12_CPU_DESCRIPTOR_HANDLE h(g_srvheap->GetCPUDescriptorHandleForHeapStart());
+
+  D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+  srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+  srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+  srvDesc.Texture2D.MipLevels = 1;
 
   for (int i = 0; i < NUM_TEXTURES; i++) {
     ID3D12Resource* texture;
@@ -526,15 +645,16 @@ void InitTexture() {
         D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE));
 
     // Describe and create a SRV for the texture.
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.Format = textureDesc.Format;
-    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srvDesc.Texture2D.MipLevels = 1;
+    g_device->CreateShaderResourceView(texture, &srvDesc, h);
+    h.Offset(g_cbvDescriptorSize);
+  }
 
-    g_device->CreateShaderResourceView(texture, 
-      &srvDesc, 
-      h);
+  // Main canvas and light mask
+  {
+    g_device->CreateShaderResourceView(g_maincanvas, &srvDesc, h);
+    h.Offset(g_cbvDescriptorSize);
+
+    g_device->CreateShaderResourceView(g_scatterlight, &srvDesc, h);
     h.Offset(g_cbvDescriptorSize);
   }
 }
@@ -555,7 +675,7 @@ void InitConstantBuffer() {
   cbvDesc.BufferLocation = g_constantbuffer->GetGPUVirtualAddress();
   cbvDesc.SizeInBytes = SIZE;
 
-  CD3DX12_CPU_DESCRIPTOR_HANDLE handle1(g_srvheap->GetCPUDescriptorHandleForHeapStart(), NUM_TEXTURES, g_cbvDescriptorSize);
+  CD3DX12_CPU_DESCRIPTOR_HANDLE handle1(g_srvheap->GetCPUDescriptorHandleForHeapStart(), NUM_TEXTURES + NUM_SRVS, g_cbvDescriptorSize);
 
   g_device->CreateConstantBufferView(&cbvDesc, handle1);
 
@@ -632,7 +752,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
   InitSwapChain();
   InitDescriptorHeap();
   InitAssets();
-  InitTexture();
+  InitTextureAndSRVs();
   InitConstantBuffer();
   EndInitializeFence();
   
@@ -705,7 +825,7 @@ void Render() {
   CE(g_commandallocator_copier->Reset());
   CE(g_commandlist_copier->Reset(g_commandallocator_copier, g_pipelinestate_copier));
 
-  CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle_scatter, rtvHandle;
+  CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle_canvas, rtvHandle, rtvHandle_lightmask;
   CD3DX12_GPU_DESCRIPTOR_HANDLE gpuSrvHandle;
 
   g_commandlist->SetGraphicsRootSignature(g_rootsignature);
@@ -732,20 +852,26 @@ void Render() {
 
   // Draw stuff
 
-  g_commandlist->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(g_scattertargets, D3D12_RESOURCE_STATE_COPY_SOURCE,
+  g_commandlist->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(g_maincanvas, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
     D3D12_RESOURCE_STATE_RENDER_TARGET));
 
-  rtvHandle_scatter = CD3DX12_CPU_DESCRIPTOR_HANDLE(g_descriptorheap->GetCPUDescriptorHandleForHeapStart(), FrameCount, g_rtvDescriptorSize);
+  // 这个barrier需要放到这里以保证正确性
+  g_commandlist->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(g_scatterlight, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+    D3D12_RESOURCE_STATE_RENDER_TARGET));
+
+  rtvHandle_canvas = CD3DX12_CPU_DESCRIPTOR_HANDLE(g_descriptorheap->GetCPUDescriptorHandleForHeapStart(), FrameCount, g_rtvDescriptorSize);
+  rtvHandle_lightmask = rtvHandle_canvas;
+  rtvHandle_lightmask.Offset(g_rtvDescriptorSize);
   rtvHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(g_descriptorheap->GetCPUDescriptorHandleForHeapStart(), g_frameindex, g_rtvDescriptorSize);
 
   const float clearColor[] = { 1.0f, 1.0f, 0.8f, 1.0f };
 
-  g_commandlist->OMSetRenderTargets(1, &rtvHandle_scatter, FALSE, nullptr);
-  g_commandlist_bb->OMSetRenderTargets(1, &rtvHandle_scatter, FALSE, nullptr);
+  g_commandlist->OMSetRenderTargets(1, &rtvHandle_canvas, FALSE, nullptr);
+  g_commandlist_bb->OMSetRenderTargets(1, &rtvHandle_canvas, FALSE, nullptr);
 
-  g_commandlist->ClearRenderTargetView(rtvHandle_scatter, clearColor, 0, nullptr);
+  g_commandlist->ClearRenderTargetView(rtvHandle_canvas, clearColor, 0, nullptr);
   g_commandlist->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-  g_commandlist->IASetVertexBuffers(0, 1, &g_vertexbufferview);
+  g_commandlist->IASetVertexBuffers(0, 1, &g_vbv_unitsquare);
 
   g_commandlist_bb->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
   g_commandlist_bb->IASetVertexBuffers(0, 1, &g_vertexbufferview1);
@@ -790,17 +916,82 @@ void Render() {
   g_commandqueue->ExecuteCommandLists(1, (ID3D12CommandList* const*)(&g_commandlist));
   g_commandqueue->ExecuteCommandLists(1, (ID3D12CommandList* const*)(&g_commandlist_bb));
 
-  g_commandlist_copier->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(g_scattertargets, D3D12_RESOURCE_STATE_RENDER_TARGET,
-    D3D12_RESOURCE_STATE_COPY_SOURCE));
-  g_commandlist_copier->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(g_rendertargets[g_frameindex], D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST));
+  {
+    // Render to light masks
+    g_commandlist->Reset(g_commandallocator, g_pipelinestate_lightmask);
+    g_commandlist->SetGraphicsRootSignature(g_rootsignature);
+    g_commandlist->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
+    g_commandlist->RSSetViewports(1, &g_viewport);
+    g_commandlist->RSSetScissorRects(1, &g_scissorrect);
+    float ones[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    g_commandlist->OMSetRenderTargets(1, &rtvHandle_lightmask, FALSE, nullptr);
+    g_commandlist->OMSetBlendFactor(blend_factor);
+    g_commandlist->ClearRenderTargetView(rtvHandle_lightmask, ones, 0, nullptr);
+    g_commandlist->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    g_commandlist->IASetVertexBuffers(0, 1, &g_vbv_unitsquare);
 
-  g_commandlist_copier->CopyResource(g_rendertargets[g_frameindex], g_scattertargets);
+    g_commandlist->SetGraphicsRootConstantBufferView(2, g_constantbuffer->GetGPUVirtualAddress());
 
-  g_commandlist_copier->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(g_rendertargets[g_frameindex], D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT));
+    for (int i = 0; i < N; i++) {
+      SpriteInstance* pSprInst = g_spriteInstances[i];
+      const int textureId = pSprInst->pSprite->textureId;
+
+      gpuSrvHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(g_srvheap->GetGPUDescriptorHandleForHeapStart());
+      gpuSrvHandle.Offset(textureId * g_cbvDescriptorSize);
+
+      g_commandlist->SetGraphicsRootDescriptorTable(0, gpuSrvHandle);
+      g_commandlist->SetGraphicsRootConstantBufferView(1, g_constantbuffer->GetGPUVirtualAddress() + ALIGN * (1 + i)); // the CB is in slot 1 of the root signature...
+      g_commandlist->DrawInstanced(6, 1, 0, 0);
+    }
+    
+    g_commandlist->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(g_scatterlight, D3D12_RESOURCE_STATE_RENDER_TARGET,
+      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE));
+    CE(g_commandlist->Close());
+    g_commandqueue->ExecuteCommandLists(1, (ID3D12CommandList* const*)(&g_commandlist));
+  }
+
+  {
+    // Combine
+    g_commandlist->Reset(g_commandallocator, g_pipelinestate_combine);
+    
+    g_commandlist->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(g_maincanvas, D3D12_RESOURCE_STATE_RENDER_TARGET,
+      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE));
+    g_commandlist->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(g_rendertargets[g_frameindex], D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET));
+
+    g_commandlist->SetGraphicsRootSignature(g_rootsignature_combine);
+    g_commandlist->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
+    g_commandlist->RSSetViewports(1, &g_viewport);
+    g_commandlist->RSSetScissorRects(1, &g_scissorrect);
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE cpu_handle(g_descriptorheap->GetCPUDescriptorHandleForHeapStart(), g_frameindex * g_rtvDescriptorSize);
+    g_commandlist->OMSetRenderTargets(1, &cpu_handle, true, nullptr);
+
+    g_commandlist->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    g_commandlist->IASetVertexBuffers(0, 1, &g_vbv_fsquad);
+
+    CD3DX12_GPU_DESCRIPTOR_HANDLE gpu_handle1(g_srvheap->GetGPUDescriptorHandleForHeapStart(), NUM_TEXTURES * g_cbvDescriptorSize);
+    g_commandlist->SetGraphicsRootDescriptorTable(0, gpu_handle1);
+
+    g_commandlist->DrawInstanced(6, 1, 0, 0);
+    
+    g_commandlist->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(g_rendertargets[g_frameindex], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT));
+
+    CE(g_commandlist->Close());
+    g_commandqueue->ExecuteCommandLists(1, (ID3D12CommandList* const*)(&g_commandlist));
+  }
+
+  if (0) {
+    g_commandlist_copier->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(g_maincanvas, D3D12_RESOURCE_STATE_RENDER_TARGET,
+      D3D12_RESOURCE_STATE_COPY_SOURCE));
+    g_commandlist_copier->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(g_rendertargets[g_frameindex], D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_COPY_DEST));
+
+    g_commandlist_copier->CopyResource(g_rendertargets[g_frameindex], g_maincanvas);
+
+    g_commandlist_copier->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(g_rendertargets[g_frameindex], D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT));
+
+  }
 
   CE(g_commandlist_copier->Close());
-
-
   // Execute Command List
   g_commandqueue->ExecuteCommandLists(1, (ID3D12CommandList* const*)(&g_commandlist_copier));
 
