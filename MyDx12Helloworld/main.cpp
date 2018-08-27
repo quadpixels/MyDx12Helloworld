@@ -32,9 +32,11 @@ ID3D12RootSignature* g_rootsignature;
 ID3D12RootSignature* g_rootsignature_bb;
 ID3D12RootSignature* g_rootsignature_copier;
 ID3D12RootSignature* g_rootsignature_combine;
+ID3D12RootSignature* g_rootsignature_drawlight; // start adding drawlight: 20180826 20:41
 ID3D12PipelineState* g_pipelinestate;
 ID3D12PipelineState* g_pipelinestate_bb;
 ID3D12PipelineState* g_pipelinestate_copier;
+ID3D12PipelineState* g_pipelinestate_drawlight;
 ID3D12PipelineState* g_pipelinestate_lightmask;
 ID3D12PipelineState* g_pipelinestate_combine;
 
@@ -51,6 +53,7 @@ ID3DBlob* g_VS, *g_PS;
 ID3DBlob* g_VS1, *g_PS1, *g_GS1;
 ID3DBlob* g_VS2, *g_PS2;
 ID3DBlob *g_VS_combine, *g_PS_combine;
+ID3DBlob *g_VS_drawlight, *g_PS_drawlight;
 ID3D12Resource* g_vb_unitsquare;
 ID3D12Resource* g_vertexbuffer1;
 ID3D12Resource* g_vb_fsquad; // FS Quad = Full Screen Quad
@@ -60,6 +63,7 @@ D3D12_VERTEX_BUFFER_VIEW g_vertexbufferview1;
 ID3D12Resource* g_texture;
 ID3D12DescriptorHeap* g_srvheap;
 ID3D12Resource* g_constantbuffer;
+ID3D12Resource* g_constantbuffer_drawlight;
 unsigned char* g_pCbvDataBegin;
 int g_cbvDescriptorSize;
 
@@ -103,12 +107,21 @@ float g_cam_delta_x = 0;
 float g_cam_delta_y = 0;
 ConstantBufferData g_constantbufferdata;
 
+struct ConstantBufferDataDrawLight {
+  float WIN_W, WIN_H;
+  float light_x, light_y, light_r;
+  DirectX::XMVECTOR light_color;
+};
+ConstantBufferDataDrawLight g_constantbufferdata_drawlight;
+
 void CE(HRESULT x) {
   if (FAILED(x)) {
     printf("ERROR: %X\n", x);
     throw std::exception();
   }
 }
+
+float g_scene_background[] = { 0.5f, 0.5f, 0.7f, 1.0f };
 
 unsigned char* LoadTexture(LPCWSTR file_name, UINT* w, UINT* h) {
   ComPtr<IWICImagingFactory> m_pWICFactory;
@@ -209,7 +222,7 @@ void InitDescriptorHeap() {
   CE(g_device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&g_descriptorheap)));
 
   D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
-  srvHeapDesc.NumDescriptors = NUM_TEXTURES + 3; // +1 for the constant buffer, +2 for the two SRVs
+  srvHeapDesc.NumDescriptors = NUM_TEXTURES + 4; // +1 for the constant buffer, +2 for the two SRVs, +1 for the light parameters
   srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   CE(g_device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&g_srvheap)));
@@ -240,9 +253,7 @@ void InitDescriptorHeap() {
   textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
 
   {
-
-    float c[] = { 1.0f, 1.0f, 0.8f, 1.0f };
-    CD3DX12_CLEAR_VALUE clear_value(DXGI_FORMAT_R8G8B8A8_UNORM, c);
+    CD3DX12_CLEAR_VALUE clear_value(DXGI_FORMAT_R8G8B8A8_UNORM, g_scene_background);
 
     HRESULT result = g_device->CreateCommittedResource(
       &(CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT)),
@@ -259,8 +270,8 @@ void InitDescriptorHeap() {
 
   {
     rtvHandle.Offset(1, g_rtvDescriptorSize);
-    float ones[] = { 1.0f, 1.0f, 1.0f, 1.0f };
-    CD3DX12_CLEAR_VALUE cv1(DXGI_FORMAT_R8G8B8A8_UNORM, ones);
+    float zeros[] = { .0f, .0f, .0f, .0f };
+    CD3DX12_CLEAR_VALUE cv1(DXGI_FORMAT_R8G8B8A8_UNORM, zeros);
     HRESULT result = g_device->CreateCommittedResource(
       &(CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT)),
       D3D12_HEAP_FLAG_NONE,
@@ -336,25 +347,40 @@ void InitAssets() {
     {
       ranges[0].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE);
       rootParameters[0].InitAsDescriptorTable(1, &ranges[0], D3D12_SHADER_VISIBILITY_PIXEL);
-
-      //ranges[1].Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1, 0, D3D12_DESCRIPTOR_RANGE_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE);
-      //rootParameters[1].InitAsDescriptorTable(1, &ranges[1], D3D12_SHADER_VISIBILITY_PIXEL);
+      rootParameters[1].InitAsConstantBufferView(0U, 0U, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, D3D12_SHADER_VISIBILITY_ALL);
 
       CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc;
-      rootSignatureDesc.Init_1_1(1, rootParameters,
+      rootSignatureDesc.Init_1_1(2, rootParameters,
         1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
       );
       ID3DBlob *signature, *error;
       HRESULT x = D3DX12SerializeVersionedRootSignature(&rootSignatureDesc,
         D3D_ROOT_SIGNATURE_VERSION_1_1,
-        &signature,
-        &error);
+        &signature, &error);
       if (signature == nullptr) {
         printf("Error create root signature for combine: %s\n", (char*)(error->GetBufferPointer()));
       }
       CE(g_device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(),
         IID_PPV_ARGS(&g_rootsignature_combine)));
       g_rootsignature_combine->SetName(L"g_rootsignature_combine");
+    }
+
+    // DrawLight signature
+    {
+      rootParameters[0].InitAsConstantBufferView(0U, 0U, D3D12_ROOT_DESCRIPTOR_FLAG_NONE, 
+        D3D12_SHADER_VISIBILITY_ALL);
+      CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDesc;
+      rootSignatureDesc.Init_1_1(1, rootParameters, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+      ID3DBlob *signature, *error;
+      HRESULT x = D3DX12SerializeVersionedRootSignature(&rootSignatureDesc,
+        D3D_ROOT_SIGNATURE_VERSION_1_1,
+        &signature, &error);
+      if (signature == nullptr) {
+        printf("Error create root signature for combine: %s\n", (char*)(error->GetBufferPointer()));
+      }
+      CE(g_device->CreateRootSignature(0, signature->GetBufferPointer(), signature->GetBufferSize(),
+        IID_PPV_ARGS(&g_rootsignature_drawlight)));
+      g_rootsignature_drawlight->SetName(L"g_rootsignature_drawlight");
     }
   }
 
@@ -367,35 +393,31 @@ void InitAssets() {
 
   ID3DBlob* error = nullptr;
   CE(D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &g_VS, &error));
-  if (error)
-    printf("Error compiling VS: %s\n", (char*)error->GetBufferPointer());
+  if (error) printf("Error compiling VS: %s\n", (char*)error->GetBufferPointer());
   CE(D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &g_PS, &error));
-  if (error)
-    printf("Error compiling PS: %s\n", (char*)error->GetBufferPointer());
+  if (error) printf("Error compiling PS: %s\n", (char*)error->GetBufferPointer());
 
   CE(D3DCompileFromFile(L"shader_polygon.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &g_VS1, &error));
-  if (error)
-    printf("Error compiling VS: %s\n", (char*)error->GetBufferPointer());
+  if (error) printf("Error compiling VS: %s\n", (char*)error->GetBufferPointer());
   CE(D3DCompileFromFile(L"shader_polygon.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &g_PS1, &error));
-  if (error)
-    printf("Error compiling PS: %s\n", (char*)error->GetBufferPointer());
+  if (error) printf("Error compiling PS: %s\n", (char*)error->GetBufferPointer());
   CE(D3DCompileFromFile(L"shader_polygon.hlsl", nullptr, nullptr, "GSMain", "gs_5_0", compileFlags, 0, &g_GS1, &error));
-  if (error)
-    printf("Error compiling GS: %s\n", (char*)error->GetBufferPointer());
+  if (error) printf("Error compiling GS: %s\n", (char*)error->GetBufferPointer());
 
   CE(D3DCompileFromFile(L"shaders_mask.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &g_VS2, &error));
-  if (error)
-    printf("Error compiling VS: %s\n", (char*)error->GetBufferPointer());
+  if (error) printf("Error compiling VS: %s\n", (char*)error->GetBufferPointer());
   CE(D3DCompileFromFile(L"shaders_mask.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &g_PS2, &error));
-  if (error)
-    printf("Error compiling PS: %s\n", (char*)error->GetBufferPointer());
+  if (error) printf("Error compiling PS: %s\n", (char*)error->GetBufferPointer());
 
   CE(D3DCompileFromFile(L"shaders_combine.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &g_VS_combine, &error));
-  if (error)
-    printf("Error compiling VS: %s\n", (char*)error->GetBufferPointer());
+  if (error) printf("Error compiling VS: %s\n", (char*)error->GetBufferPointer());
   CE(D3DCompileFromFile(L"shaders_combine.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &g_PS_combine, &error));
-  if (error)
-    printf("Error compiling PS: %s\n", (char*)error->GetBufferPointer());
+  if (error) printf("Error compiling PS: %s\n", (char*)error->GetBufferPointer());
+
+  CE(D3DCompileFromFile(L"shaders_drawlight.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &g_VS_drawlight, &error));
+  if (error) printf("Error compiling VS: %s\n", (char*)error->GetBufferPointer());
+  CE(D3DCompileFromFile(L"shaders_drawlight.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &g_PS_drawlight, &error));
+  if (error) printf("Error compiling PS: %s\n", (char*)error->GetBufferPointer());
 
   D3D12_INPUT_ELEMENT_DESC inputElementDescs[] =
   {
@@ -474,6 +496,11 @@ void InitAssets() {
   psoDesc.PS = CD3DX12_SHADER_BYTECODE(g_PS_combine);
   psoDesc.pRootSignature = g_rootsignature_combine;
   CE(g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_pipelinestate_combine)));
+
+  psoDesc.VS = CD3DX12_SHADER_BYTECODE(g_VS_drawlight);
+  psoDesc.PS = CD3DX12_SHADER_BYTECODE(g_PS_drawlight);
+  psoDesc.pRootSignature = g_rootsignature_drawlight;
+  CE(g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_pipelinestate_drawlight)));
 
   // Create vertex buffer & view
   {
@@ -669,6 +696,15 @@ void InitConstantBuffer() {
     nullptr,
     IID_PPV_ARGS(&g_constantbuffer)));
 
+  CE(g_device->CreateCommittedResource(
+    &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+    D3D12_HEAP_FLAG_NONE,
+    &CD3DX12_RESOURCE_DESC::Buffer(256),
+    D3D12_RESOURCE_STATE_GENERIC_READ,
+    nullptr,
+    IID_PPV_ARGS(&g_constantbuffer_drawlight)
+    ));
+
   const unsigned SIZE = 256 * (NUM_OBJECTS - NUM_TEXTURES); // Assume we have 100 objects
   // Describe and create a constant buffer view.
   D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
@@ -676,9 +712,7 @@ void InitConstantBuffer() {
   cbvDesc.SizeInBytes = SIZE;
 
   CD3DX12_CPU_DESCRIPTOR_HANDLE handle1(g_srvheap->GetCPUDescriptorHandleForHeapStart(), NUM_TEXTURES + NUM_SRVS, g_cbvDescriptorSize);
-
   g_device->CreateConstantBufferView(&cbvDesc, handle1);
-
 
   // Map and initialize the constant buffer. We don't unmap this until the
   // app closes. Keeping things mapped for the lifetime of the resource is okay.
@@ -686,6 +720,12 @@ void InitConstantBuffer() {
   CE(g_constantbuffer->Map(0, &readRange, (void**)&g_pCbvDataBegin));
   memcpy(g_pCbvDataBegin, &g_constantbufferdata, sizeof(g_constantbufferdata));
   g_constantbuffer->Unmap(0, NULL);
+
+  cbvDesc.BufferLocation = g_constantbuffer_drawlight->GetGPUVirtualAddress();
+  cbvDesc.SizeInBytes = 256;
+  handle1 = CD3DX12_CPU_DESCRIPTOR_HANDLE(g_srvheap->GetCPUDescriptorHandleForHeapStart(), NUM_TEXTURES + NUM_SRVS + 1,
+    g_cbvDescriptorSize);
+  g_device->CreateConstantBufferView(&cbvDesc, handle1);
 }
 
 void WaitForPreviousFrame() {
@@ -758,7 +798,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
   
   {
     // Proj matrix
-    float aspect_ratio = WIN_W * 1.0 / WIN_H;
+    float aspect_ratio = WIN_W * 1.0f / WIN_H;
     float fovy = 45.0f / (180.0f / 3.14159f);
     g_per_scene_cb_data.projection = DirectX::XMMatrixPerspectiveFovLH(fovy, aspect_ratio, 0.1f, 100.0f);
   }
@@ -783,35 +823,48 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
 }
 
 void Update() {
-
   const float translationSpeed = 2.0f; // Pixel Per Frame
   const float offsetBounds = 1.25f;
-
   const size_t N = g_spriteInstances.size();
   const UINT ALIGN = 256;
 
   CD3DX12_RANGE readRange(0, 0);		// We do not intend to read from this resource on the CPU.
-  CE(g_constantbuffer->Map(0, &readRange, (void**)&g_pCbvDataBegin));
-
-  // CB layout:
-  // [0] = scene projection & view matrix
-  // [1..N] = obj-wise locations
-  memcpy(g_pCbvDataBegin, &g_per_scene_cb_data, sizeof(g_per_scene_cb_data));
-
-  for (int i = 0; i < N; i++) {
-    SpriteInstance* sInst = g_spriteInstances.at(i);
-    ConstantBufferData d;
-    d.x = sInst->x;
-    d.y = sInst->y;
-    d.w = sInst->w;
-    d.h = sInst->h;
-    d.win_h = WIN_H;
-    d.win_w = WIN_W;
-    d.orientation = sInst->orientation;
-    memcpy(g_pCbvDataBegin + (1+i)*ALIGN, &d, sizeof(d));
+  {
+    CE(g_constantbuffer->Map(0, &readRange, (void**)&g_pCbvDataBegin));
+    // CB layout:
+    // [0] = scene projection & view matrix
+    // [1..N] = obj-wise locations
+    memcpy(g_pCbvDataBegin, &g_per_scene_cb_data, sizeof(g_per_scene_cb_data));
+    for (int i = 0; i < N; i++) {
+      SpriteInstance* sInst = g_spriteInstances.at(i);
+      ConstantBufferData d;
+      d.x = sInst->x;
+      d.y = sInst->y;
+      d.w = sInst->w;
+      d.h = sInst->h;
+      d.win_h = WIN_H * 1.0f;
+      d.win_w = WIN_W * 1.0f;
+      d.orientation = sInst->orientation;
+      memcpy(g_pCbvDataBegin + (1 + i)*ALIGN, &d, sizeof(d));
+    }
+    g_constantbuffer->Unmap(0, nullptr);
   }
 
-  g_constantbuffer->Unmap(0, NULL);
+  {
+    g_constantbufferdata_drawlight.light_x = WIN_W * 0.25f;
+    g_constantbufferdata_drawlight.light_y = WIN_H * 0.25f;
+    g_constantbufferdata_drawlight.light_r = 150.0f;
+    g_constantbufferdata_drawlight.WIN_H = WIN_H * 1.0f;
+    g_constantbufferdata_drawlight.WIN_W = WIN_W * 1.0f;
+    g_constantbufferdata_drawlight.light_color.m128_f32[0] = 1.0f;
+    g_constantbufferdata_drawlight.light_color.m128_f32[1] = 1.0f;
+    g_constantbufferdata_drawlight.light_color.m128_f32[2] = 1.0f;
+    g_constantbufferdata_drawlight.light_color.m128_f32[3] = 1.0f;
+
+    CE(g_constantbuffer_drawlight->Map(0, &readRange, (void**)&g_pCbvDataBegin));
+    memcpy(g_pCbvDataBegin, &g_constantbufferdata_drawlight, sizeof(g_constantbufferdata_drawlight));
+    g_constantbuffer_drawlight->Unmap(0, nullptr);
+  }
 }
 
 void Render() {
@@ -864,7 +917,7 @@ void Render() {
   rtvHandle_lightmask.Offset(g_rtvDescriptorSize);
   rtvHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(g_descriptorheap->GetCPUDescriptorHandleForHeapStart(), g_frameindex, g_rtvDescriptorSize);
 
-  const float clearColor[] = { 1.0f, 1.0f, 0.8f, 1.0f };
+  const float* clearColor = g_scene_background;
 
   g_commandlist->OMSetRenderTargets(1, &rtvHandle_canvas, FALSE, nullptr);
   g_commandlist_bb->OMSetRenderTargets(1, &rtvHandle_canvas, FALSE, nullptr);
@@ -917,16 +970,36 @@ void Render() {
   g_commandqueue->ExecuteCommandLists(1, (ID3D12CommandList* const*)(&g_commandlist_bb));
 
   {
-    // Render to light masks
+    // Render light
+    g_commandlist->Reset(g_commandallocator, g_pipelinestate_drawlight);
+    g_commandlist->SetGraphicsRootSignature(g_rootsignature_drawlight);
+    g_commandlist->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
+    g_commandlist->RSSetViewports(1, &g_viewport);
+    g_commandlist->RSSetScissorRects(1, &g_scissorrect);
+    float zeros[] = { .0f, .0f, .0f, .0f };
+    g_commandlist->OMSetRenderTargets(1, &rtvHandle_lightmask, FALSE, nullptr);
+    g_commandlist->OMSetBlendFactor(blend_factor);
+    g_commandlist->ClearRenderTargetView(rtvHandle_lightmask, zeros, 0, nullptr);
+    g_commandlist->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    g_commandlist->IASetVertexBuffers(0, 1, &g_vbv_fsquad);
+
+    g_commandlist->SetGraphicsRootConstantBufferView(0, g_constantbuffer_drawlight->GetGPUVirtualAddress());
+    g_commandlist->DrawInstanced(6, 1, 0, 0);
+
+    CE(g_commandlist->Close());
+    g_commandqueue->ExecuteCommandLists(1, (ID3D12CommandList* const*)(&g_commandlist));
+
+  }
+
+  {
+    // Render light masks
     g_commandlist->Reset(g_commandallocator, g_pipelinestate_lightmask);
     g_commandlist->SetGraphicsRootSignature(g_rootsignature);
     g_commandlist->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
     g_commandlist->RSSetViewports(1, &g_viewport);
     g_commandlist->RSSetScissorRects(1, &g_scissorrect);
-    float ones[] = { 1.0f, 1.0f, 1.0f, 1.0f };
     g_commandlist->OMSetRenderTargets(1, &rtvHandle_lightmask, FALSE, nullptr);
     g_commandlist->OMSetBlendFactor(blend_factor);
-    g_commandlist->ClearRenderTargetView(rtvHandle_lightmask, ones, 0, nullptr);
     g_commandlist->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     g_commandlist->IASetVertexBuffers(0, 1, &g_vbv_unitsquare);
 
@@ -971,6 +1044,8 @@ void Render() {
 
     CD3DX12_GPU_DESCRIPTOR_HANDLE gpu_handle1(g_srvheap->GetGPUDescriptorHandleForHeapStart(), NUM_TEXTURES * g_cbvDescriptorSize);
     g_commandlist->SetGraphicsRootDescriptorTable(0, gpu_handle1);
+
+    g_commandlist->SetGraphicsRootConstantBufferView(1, g_constantbuffer_drawlight->GetGPUVirtualAddress());
 
     g_commandlist->DrawInstanced(6, 1, 0, 0);
     
