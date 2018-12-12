@@ -13,6 +13,7 @@ cbuffer PerSceneCB : register(b0)
   float WIN_W, WIN_H;
   float light_x, light_y, light_r;
   float4 light_color;
+  float global_alpha;
 }
 
 Texture2D g_src1 : register(t0);
@@ -57,6 +58,6 @@ float4 PSMain(PSInput input) : SV_TARGET
   }
   
   {
-    return rgba1 + (rgba2*exposure);
+    return (rgba1 + (rgba2*exposure)) * global_alpha;
   }
 }

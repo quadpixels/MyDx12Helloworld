@@ -34,3 +34,7 @@
 #include <stdio.h>
 #include <exception>
 #include <windows.h>
+#include <d2d1_2.h>
+#include <dwrite_2.h>
+#include <d3d11.h>
+#include <d3d11on12.h>

@@ -15,6 +15,32 @@ struct PerSceneCBData {
   DirectX::XMMATRIX projection;
 };
 
+enum SceneState {
+  SceneFadingIn,
+  SceneFadingOutThenIn,
+  ScenePlaying
+};
+
+class SceneManager {
+public:
+  SceneState state;
+  SceneManager() {
+    state = SceneFadingIn;
+  }
+  const float DURATION = 1.0f;
+  float completion;
+  void FadeIn();
+  void Update(float secs);
+  float GetZoomFactor();
+  void FadeOutLoadLevelFadeIn(int x);
+  int GetCurrLevel();
+  int NextLevel();
+private:
+  int level_to_load;
+  int curr_level;
+  const int NUM_LEVELS = 2;
+};
+
 class Sprite {
 public:
   float u0, v0, u1, v1; // location in the sprite sheet
@@ -38,6 +64,15 @@ public:
   float follower_complete_cooldown; // seconds
 };
 
+class LevelState {
+public:
+  int num_total_sprites;
+  int num_saved_sprites;
+  void OnSpriteSaved();
+  void Reset() { num_total_sprites = num_saved_sprites = 0; }
+  bool IsAllSpritesSaved() { return num_total_sprites == num_saved_sprites; }
+};
+
 class SpriteInstance {
 public:
   float x, y; // in Game World
@@ -51,6 +86,7 @@ public:
   }
   virtual void Update(float secs) { }
   virtual int Collide(SpriteInstance* other, float* new_x, float* new_y);
+  virtual bool Visible() { return true; }
 };
 
 class ActorInstance : public SpriteInstance {
@@ -133,7 +169,20 @@ public:
   }
 };
 
-void PopulateDummy();
+class ExitInstance : public SpriteInstance {
+public:
+  bool enabled;
+  ExitInstance(float _x, float _y, float _w, float _h, Sprite* _spr) :
+    SpriteInstance(_x, _y, _w, _h, _spr) {
+    enabled = false;
+  }
+  virtual bool Visible() { 
+    return enabled; 
+  }
+};
+
+void LoadDummyAssets();
 void OnKeyDown(WPARAM wParam, LPARAM lParam);
 void OnKeyUp(WPARAM wParam, LPARAM lParam);
 void GameplayUpdate();
+void LoadLevel(int);

@@ -7,6 +7,14 @@
 #include <wrl.h>
 #include "Header.h"
 
+// 2d stuff
+ID3D11Device* g_d3d11device;
+ID3D11DeviceContext* g_d3d11context;
+IDWriteFactory2* g_writefactory;
+ID2D1Factory2* g_d2dfactory;
+ID2D1Device1* g_d2ddev;
+ID2D1DeviceContext1* g_d2dcontext;
+
 bool g_showBoundingBox = false;
 
 using Microsoft::WRL::ComPtr;
@@ -55,9 +63,12 @@ ID3DBlob* g_VS2, *g_PS2;
 ID3DBlob *g_VS_combine, *g_PS_combine;
 ID3DBlob *g_VS_drawlight, *g_PS_drawlight;
 ID3D12Resource* g_vb_unitsquare;
+ID3D12Resource* g_vb_unitcube;
 ID3D12Resource* g_vertexbuffer1;
 ID3D12Resource* g_vb_fsquad; // FS Quad = Full Screen Quad
+
 D3D12_VERTEX_BUFFER_VIEW g_vbv_unitsquare;
+D3D12_VERTEX_BUFFER_VIEW g_vbv_unitcube;
 D3D12_VERTEX_BUFFER_VIEW g_vbv_fsquad;
 D3D12_VERTEX_BUFFER_VIEW g_vertexbufferview1;
 ID3D12Resource* g_texture;
@@ -66,6 +77,10 @@ ID3D12Resource* g_constantbuffer;
 ID3D12Resource* g_constantbuffer_drawlight;
 unsigned char* g_pCbvDataBegin;
 int g_cbvDescriptorSize;
+
+ID3D12Resource* g_dsv_buffer;
+ID3D12DescriptorHeap* g_dsv_heap;
+int g_dsvDescriptorSize;
 
 bool g_init_done = false;
 
@@ -77,7 +92,13 @@ const wchar_t* texNames[] = {
   L"brick.png",
   L"pic4.png",
   L"pic5.png",
+  L"pic_exit.png",
 };
+
+bool IsWallTexture(int tid) {
+  return (tid == 4);
+}
+
 const int NUM_TEXTURES = sizeof(texNames) / sizeof(texNames[0]);
 const int NUM_SRVS = 2;
 
@@ -111,6 +132,7 @@ struct ConstantBufferDataDrawLight {
   float WIN_W, WIN_H;
   float light_x, light_y, light_r;
   DirectX::XMVECTOR light_color;
+  float global_alpha;
 };
 ConstantBufferDataDrawLight g_constantbufferdata_drawlight;
 
@@ -227,8 +249,15 @@ void InitDescriptorHeap() {
   srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
   CE(g_device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&g_srvheap)));
 
+  D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
+  dsvHeapDesc.NumDescriptors = 1;
+  dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+  dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+  CE(g_device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&g_dsv_heap)));
+
   g_rtvDescriptorSize = g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
   g_cbvDescriptorSize = g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+  g_dsvDescriptorSize = g_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
 
   CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(g_descriptorheap->GetCPUDescriptorHandleForHeapStart());
   for (UINT i = 0; i < FrameCount; i++) {
@@ -283,6 +312,28 @@ void InitDescriptorHeap() {
     g_scatterlight->SetName(L"Light map");
     CE(result);
     g_device->CreateRenderTargetView(g_scatterlight, nullptr, rtvHandle);
+  }
+
+  {
+    D3D12_DEPTH_STENCIL_VIEW_DESC dsv_desc = { };
+    dsv_desc.Format = DXGI_FORMAT_D32_FLOAT;
+    dsv_desc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+    dsv_desc.Flags = D3D12_DSV_FLAG_NONE;
+
+    D3D12_CLEAR_VALUE depthOptimizedClearValue = {};
+    depthOptimizedClearValue.Format = DXGI_FORMAT_D32_FLOAT;
+    depthOptimizedClearValue.DepthStencil.Depth = 1.0f;
+    depthOptimizedClearValue.DepthStencil.Stencil = 0;
+
+    g_device->CreateCommittedResource(
+      &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+      D3D12_HEAP_FLAG_NONE,
+      &CD3DX12_RESOURCE_DESC::Tex2D(DXGI_FORMAT_D32_FLOAT, WIN_W, WIN_H, 1, 0, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL),
+      D3D12_RESOURCE_STATE_DEPTH_WRITE,
+      &depthOptimizedClearValue,
+      IID_PPV_ARGS(&g_dsv_buffer)
+    );
+    g_device->CreateDepthStencilView(g_dsv_buffer, &dsv_desc, g_dsv_heap->GetCPUDescriptorHandleForHeapStart());
   }
 
   CE(g_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&g_commandallocator)));
@@ -449,7 +500,7 @@ void InitAssets() {
   rtbd.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
   psoDesc.BlendState.RenderTarget[0] = rtbd;
 
-  psoDesc.DepthStencilState.DepthEnable = FALSE;
+  psoDesc.DepthStencilState.DepthEnable = TRUE;
   psoDesc.DepthStencilState.StencilEnable = FALSE;
   psoDesc.SampleMask = UINT_MAX;
   psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
@@ -457,10 +508,14 @@ void InitAssets() {
   psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
   psoDesc.SampleDesc.Count = 1;
   psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+  psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+  psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
   
   CE(g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_pipelinestate)));
-
   CE(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, g_commandallocator, g_pipelinestate, IID_PPV_ARGS(&g_commandlist)));
+
+
+  psoDesc.DepthStencilState.DepthEnable = FALSE;
 
   // PSO #1
   D3D12_INPUT_ELEMENT_DESC inputElementDescs1[] =
@@ -474,6 +529,7 @@ void InitAssets() {
   psoDesc.GS = CD3DX12_SHADER_BYTECODE(g_GS1);
   psoDesc.InputLayout = { inputElementDescs1, _countof(inputElementDescs1) };
   psoDesc.RasterizerState.AntialiasedLineEnable = true;
+
   
   CE(g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_pipelinestate_copier)));
   CE(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, g_commandallocator_copier, g_pipelinestate_copier, IID_PPV_ARGS(&g_commandlist_copier)));
@@ -481,6 +537,8 @@ void InitAssets() {
   // PSO #2 is the same as #1
   CE(g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_pipelinestate_bb)));
   CE(g_device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, g_commandallocator_bb, g_pipelinestate_bb, IID_PPV_ARGS(&g_commandlist_bb)));
+
+  psoDesc.DepthStencilState.DepthEnable = FALSE;;
 
   // Disable blending for light mask and combine
   rtbd.BlendEnable = false;
@@ -502,7 +560,7 @@ void InitAssets() {
   psoDesc.pRootSignature = g_rootsignature_drawlight;
   CE(g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_pipelinestate_drawlight)));
 
-  // Create vertex buffer & view
+  // Create vertex buffer & view for unit square
   {
     VertexAndUV verts[] = {
       {  0.5f,  0.5f, 0.0f,  1.0f, 0.0f }, //  
@@ -532,6 +590,72 @@ void InitAssets() {
     g_vbv_unitsquare.BufferLocation = g_vb_unitsquare->GetGPUVirtualAddress();
     g_vbv_unitsquare.StrideInBytes = sizeof(VertexAndUV);
     g_vbv_unitsquare.SizeInBytes = sizeof(verts);
+  }
+
+  // Create vertex buffer & view for unit cube
+  {
+    VertexAndUV verts[] = {
+      // -Z
+      {  0.5f,  0.5f, -0.5f,  1.0f, 0.0f }, //  
+      {  0.5f, -0.5f, -0.5f,  1.0f, 1.0f }, //  +-----------+ UV = (1, 0), NDC=(1, 1)
+      { -0.5f, -0.5f, -0.5f,  0.0f, 1.0f }, //  |           |
+                                            //  |    -Z     |
+      { -0.5f, -0.5f, -0.5f,  0.0f, 1.0f }, //  |           |
+      { -0.5f,  0.5f, -0.5f,  0.0f, 0.0f }, //  |           |
+      {  0.5f,  0.5f, -0.5f,  1.0f, 0.0f }, //  +-----------+ UV = (1, 1), NDC=(1,-1)
+
+      // +X
+      { 0.5f,  0.5f,  0.5f, 1.0f, 0.0f },
+      { 0.5f, -0.5f,  0.5f, 1.0f, 1.0f },
+      { 0.5f, -0.5f, -0.5f, 0.0f, 1.0f },
+      { 0.5f, -0.5f, -0.5f, 0.0f, 1.0f },
+      { 0.5f,  0.5f, -0.5f, 0.0f, 0.0f },
+      { 0.5f,  0.5f,  0.5f, 1.0f, 0.0f },
+
+      // -X
+      { -0.5f,  0.5f, -0.5f, 1.0f, 0.0f },
+      { -0.5f, -0.5f, -0.5f, 1.0f, 1.0f },
+      { -0.5f, -0.5f,  0.5f, 0.0f, 1.0f },
+      { -0.5f, -0.5f,  0.5f, 0.0f, 1.0f },
+      { -0.5f,  0.5f,  0.5f, 0.0f, 0.0f },
+      { -0.5f,  0.5f, -0.5f, 1.0f, 0.0f },
+
+      // +Y
+      {  0.5f, 0.5f,  0.5f, 1.0f, 0.0f },
+      {  0.5f, 0.5f, -0.5f, 1.0f, 1.0f },
+      { -0.5f, 0.5f, -0.5f, 0.0f, 1.0f },
+      { -0.5f, 0.5f, -0.5f, 0.0f, 1.0f },
+      { -0.5f, 0.5f,  0.5f, 0.0f, 0.0f },
+      {  0.5f, 0.5f,  0.5f, 1.0f, 0.0f },
+
+      // -Y
+      {  0.5f, -0.5f,  0.5f, 1.0f, 0.0f },
+      { -0.5f, -0.5f, -0.5f, 0.0f, 1.0f },
+      {  0.5f, -0.5f, -0.5f, 1.0f, 1.0f },
+      { -0.5f, -0.5f, -0.5f, 0.0f, 1.0f },
+      {  0.5f, -0.5f,  0.5f, 1.0f, 0.0f },
+      { -0.5f, -0.5f,  0.5f, 0.0f, 0.0f },
+    };
+
+    CE(g_device->CreateCommittedResource(
+      &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+      D3D12_HEAP_FLAG_NONE,
+      &CD3DX12_RESOURCE_DESC::Buffer(sizeof(verts)),
+      D3D12_RESOURCE_STATE_GENERIC_READ,
+      nullptr,
+      IID_PPV_ARGS(&g_vb_unitcube)
+    ));
+
+    // Upload
+    UINT8* pData;
+    CD3DX12_RANGE readRange(0, 0);
+    CE(g_vb_unitcube->Map(0, &readRange, (void**)(&pData)));
+    memcpy(pData, verts, sizeof(verts));
+    g_vb_unitcube->Unmap(0, nullptr);
+
+    g_vbv_unitcube.BufferLocation = g_vb_unitcube->GetGPUVirtualAddress();
+    g_vbv_unitcube.StrideInBytes = sizeof(VertexAndUV);
+    g_vbv_unitcube.SizeInBytes = sizeof(verts);
   }
 
   // Create vertex buffer & view for the full-screen quad
@@ -728,6 +852,44 @@ void InitConstantBuffer() {
   g_device->CreateConstantBufferView(&cbvDesc, handle1);
 }
 
+void InitD2DDevice() {
+
+  // Reference:
+  // D2D and D3D11
+  // from Gilles Bellot's example
+  // D2D and 11On12
+  // https://docs.microsoft.com/en-us/windows/desktop/api/d3d11on12/nf-d3d11on12-d3d11on12createdevice
+
+  UINT d3d11DeviceFlags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+  HRESULT hr0 = D3D11On12CreateDevice(
+    g_device,
+    d3d11DeviceFlags,
+    nullptr, 0,
+    (IUnknown**)(&g_commandqueue),
+    1, 0,
+    &g_d3d11device,
+    &g_d3d11context,
+    nullptr
+  );
+
+  CE(DWriteCreateFactory(
+    DWRITE_FACTORY_TYPE_SHARED,
+    __uuidof(IDWriteFactory),
+    (IUnknown**)&g_writefactory
+  ));
+
+  D2D1_FACTORY_OPTIONS options;
+  options.debugLevel = D2D1_DEBUG_LEVEL_INFORMATION;
+  CE(D2D1CreateFactory(D2D1_FACTORY_TYPE_MULTI_THREADED, __uuidof(ID2D1Factory2), &options, (void**)&g_d2dfactory));
+
+  IDXGIDevice* dxgi_device;
+  CE(g_d3d11device->QueryInterface(IID_PPV_ARGS(&dxgi_device)));
+
+  CE(g_d2dfactory->CreateDevice(dxgi_device, &g_d2ddev));
+
+  CE(g_d2ddev->CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_ENABLE_MULTITHREADED_OPTIMIZATIONS, &g_d2dcontext));
+}
+
 void WaitForPreviousFrame() {
   const UINT fence = g_fencevalue;
   CE(g_commandqueue->Signal(g_fence, fence));
@@ -794,6 +956,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
   InitAssets();
   InitTextureAndSRVs();
   InitConstantBuffer();
+
+  InitD2DDevice();
+
   EndInitializeFence();
   
   {
@@ -806,7 +971,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
   g_init_done = true;
 
   // GAMEPLAY!
-  PopulateDummy();
+  LoadDummyAssets();
+  LoadLevel(0);
 
   ShowWindow(g_hwnd, nCmdShow);
 
@@ -860,6 +1026,7 @@ void Update() {
     g_constantbufferdata_drawlight.light_color.m128_f32[1] = 1.0f;
     g_constantbufferdata_drawlight.light_color.m128_f32[2] = 1.0f;
     g_constantbufferdata_drawlight.light_color.m128_f32[3] = 1.0f;
+    g_constantbufferdata_drawlight.global_alpha = 1.0f;
 
     CE(g_constantbuffer_drawlight->Map(0, &readRange, (void**)&g_pCbvDataBegin));
     memcpy(g_pCbvDataBegin, &g_constantbufferdata_drawlight, sizeof(g_constantbufferdata_drawlight));
@@ -878,7 +1045,7 @@ void Render() {
   CE(g_commandallocator_copier->Reset());
   CE(g_commandlist_copier->Reset(g_commandallocator_copier, g_pipelinestate_copier));
 
-  CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle_canvas, rtvHandle, rtvHandle_lightmask;
+  CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle_canvas, rtvHandle, rtvHandle_lightmask, dsvHandle;
   CD3DX12_GPU_DESCRIPTOR_HANDLE gpuSrvHandle;
 
   g_commandlist->SetGraphicsRootSignature(g_rootsignature);
@@ -917,14 +1084,17 @@ void Render() {
   rtvHandle_lightmask.Offset(g_rtvDescriptorSize);
   rtvHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(g_descriptorheap->GetCPUDescriptorHandleForHeapStart(), g_frameindex, g_rtvDescriptorSize);
 
+  dsvHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(g_dsv_heap->GetCPUDescriptorHandleForHeapStart());
+
   const float* clearColor = g_scene_background;
 
-  g_commandlist->OMSetRenderTargets(1, &rtvHandle_canvas, FALSE, nullptr);
+  g_commandlist->OMSetRenderTargets(1, &rtvHandle_canvas, FALSE, &dsvHandle);
   g_commandlist_bb->OMSetRenderTargets(1, &rtvHandle_canvas, FALSE, nullptr);
+
+  g_commandlist->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
   g_commandlist->ClearRenderTargetView(rtvHandle_canvas, clearColor, 0, nullptr);
   g_commandlist->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-  g_commandlist->IASetVertexBuffers(0, 1, &g_vbv_unitsquare);
 
   g_commandlist_bb->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
   g_commandlist_bb->IASetVertexBuffers(0, 1, &g_vertexbufferview1);
@@ -948,18 +1118,30 @@ void Render() {
 
   for (int i = 0; i < N; i++) {
     SpriteInstance* pSprInst = g_spriteInstances[i];
+    if (pSprInst->Visible() == false) continue;
     const int textureId = pSprInst->pSprite->textureId;
 
     gpuSrvHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(g_srvheap->GetGPUDescriptorHandleForHeapStart());
     gpuSrvHandle.Offset(textureId * g_cbvDescriptorSize);
 
+    int num_verts = 6;
+
+    if (IsWallTexture(textureId)) {
+      g_commandlist->IASetVertexBuffers(0, 1, &g_vbv_unitcube);
+      num_verts = 30;
+    }
+    else {
+      g_commandlist->IASetVertexBuffers(0, 1, &g_vbv_unitsquare);
+      num_verts = 6;
+    }
+
     g_commandlist->SetGraphicsRootDescriptorTable(0, gpuSrvHandle);
     g_commandlist->SetGraphicsRootConstantBufferView(1, g_constantbuffer->GetGPUVirtualAddress() + ALIGN * (1+i)); // the CB is in slot 1 of the root signature...
-    g_commandlist->DrawInstanced(6, 1, 0, 0);
+    g_commandlist->DrawInstanced(num_verts, 1, 0, 0);
 
     if (g_showBoundingBox) {
       g_commandlist_bb->SetGraphicsRootConstantBufferView(1, g_constantbuffer->GetGPUVirtualAddress() + ALIGN * (1+i)); // the CB is in slot 1 of the root signature...
-      g_commandlist_bb->DrawInstanced(12, 1, 0, 0);
+      g_commandlist_bb->DrawInstanced(num_verts, 1, 0, 0);
     }
   }
 
@@ -1007,6 +1189,7 @@ void Render() {
 
     for (int i = 0; i < N; i++) {
       SpriteInstance* pSprInst = g_spriteInstances[i];
+      if (pSprInst->Visible() == false) continue;
       const int textureId = pSprInst->pSprite->textureId;
 
       gpuSrvHandle = CD3DX12_GPU_DESCRIPTOR_HANDLE(g_srvheap->GetGPUDescriptorHandleForHeapStart());

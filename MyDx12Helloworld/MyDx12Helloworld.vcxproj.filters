@@ -58,6 +58,9 @@
     <CustomBuild Include="shaders_mask.hlsl">
       <Filter>Resource Files</Filter>
     </CustomBuild>
+    <CustomBuild Include="shaders_drawlight.hlsl">
+      <Filter>Resource Files</Filter>
+    </CustomBuild>
   </ItemGroup>
   <ItemGroup>
     <Image Include="pic1.png">
@@ -66,10 +69,5 @@
     <Image Include="pic2.png">
       <Filter>Resource Files</Filter>
     </Image>
-  </ItemGroup>
-  <ItemGroup>
-    <FxCompile Include="shaders_drawlight.hlsl">
-      <Filter>Resource Files</Filter>
-    </FxCompile>
   </ItemGroup>
 </Project>
