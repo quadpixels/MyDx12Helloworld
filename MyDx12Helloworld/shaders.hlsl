@@ -13,6 +13,7 @@ struct PSInput
 {
   float4 position : SV_POSITION;
   float2 uv : TEXCOORD;
+  float3 normal : NORMAL;
 };
 
 cbuffer PerSceneCB : register(b1)
@@ -33,7 +34,8 @@ cbuffer PerObjectCB : register(b0)
 Texture2D g_texture : register(t0);
 SamplerState g_sampler : register(s0);
 
-PSInput VSMain(float4 position : POSITION, float4 uv : TEXCOORD)
+
+PSInput VSMain(float4 position : POSITION, float4 uv : TEXCOORD, float3 normal : NORMAL)
 {
   PSInput result;
   result.position.z = 0.0f;
@@ -43,10 +45,13 @@ PSInput VSMain(float4 position : POSITION, float4 uv : TEXCOORD)
   result.position = mul(orientation, position)  // Unit square
     * float4(half_w, half_h, 1.0f, 1.0f) // Aspect ratio correction
     + float4(x / 100, y / 100, 0, 0); // Translation
+  
+  float3 normal_world = mul(orientation, normal);
 
   result.position = mul(projection, mul(view, result.position));
-  result.position.z /= 1000.0f; // To make the depth between 0 and 1
+  result.position.z /= 100.0f; // To make the depth between 0 and 1
   result.uv = uv.xy;
+  result.normal = normal_world;
 
   return result;
 }
@@ -59,6 +64,12 @@ float4 PSMain(PSInput input) : SV_TARGET
     return rgba; // Still need to return
   }
   else {
+    float3 light_pos = float3(0.0f, 0.0f, -100.0f);
+    float3 lp = input.position.xyz / input.position.w - light_pos;
+    float lpdotn = dot(normalize(-lp), input.normal);
+    if (input.normal.x == 0.0f && input.normal.y == 0.0f && input.normal.z == 0.0f) lpdotn = 1.0f;
+    lpdotn = clamp(lpdotn, 0.4f, 1.0f);
+    rgba.xyz = rgba.xyz * lpdotn;
     return rgba;
   }
   //  return float4(1.0f, 1.0f, input.u, input.v);

@@ -104,8 +104,11 @@ const int NUM_SRVS = 2;
 
 extern std::vector<SpriteInstance*> g_spriteInstances;
 
-struct VertexAndUV {
+struct VertexUV {
   float x, y, z, u, v;
+};
+struct VertexUVNormal {
+  float x, y, z, u, v, nx, ny, nz;
 };
 struct VertexAndColor {
   float x, y, z, r, g, b, a;
@@ -470,16 +473,23 @@ void InitAssets() {
   CE(D3DCompileFromFile(L"shaders_drawlight.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &g_PS_drawlight, &error));
   if (error) printf("Error compiling PS: %s\n", (char*)error->GetBufferPointer());
 
-  D3D12_INPUT_ELEMENT_DESC inputElementDescs[] =
+  D3D12_INPUT_ELEMENT_DESC inputElementDescsWithNormal[] =
   {
     { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-    { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 } // May cause error in CreateGraphicsPipelineState
+    { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }, // May cause error in CreateGraphicsPipelineState
+    { "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 20, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+  };
+
+  D3D12_INPUT_ELEMENT_DESC inputElementDescsNoNormal[] =
+  {
+    { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+    { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 }, // May cause error in CreateGraphicsPipelineState
   };
 
   // PSO #0
 
   D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
-  psoDesc.InputLayout = { inputElementDescs, _countof(inputElementDescs) };
+  psoDesc.InputLayout = { inputElementDescsWithNormal, _countof(inputElementDescsWithNormal) };
   psoDesc.pRootSignature = g_rootsignature;
   psoDesc.VS = CD3DX12_SHADER_BYTECODE(g_VS);
   psoDesc.PS = CD3DX12_SHADER_BYTECODE(g_PS);
@@ -547,7 +557,7 @@ void InitAssets() {
   psoDesc.PS = CD3DX12_SHADER_BYTECODE(g_PS2);
   psoDesc.GS.BytecodeLength = 0;
   psoDesc.GS.pShaderBytecode = nullptr;
-  psoDesc.InputLayout = { inputElementDescs, _countof(inputElementDescs) };
+  psoDesc.InputLayout = { inputElementDescsNoNormal, _countof(inputElementDescsNoNormal) };
   CE(g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_pipelinestate_lightmask)));
 
   psoDesc.VS = CD3DX12_SHADER_BYTECODE(g_VS_combine);
@@ -561,15 +571,16 @@ void InitAssets() {
   CE(g_device->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&g_pipelinestate_drawlight)));
 
   // Create vertex buffer & view for unit square
+  // Normal is set to ZERO b/c these are DOUBLE-SIDED for now
   {
-    VertexAndUV verts[] = {
-      {  0.5f,  0.5f, 0.0f,  1.0f, 0.0f }, //  
-      {  0.5f, -0.5f, 0.0f,  1.0f, 1.0f }, //  +-----------+ UV = (1, 0), NDC=(1, 1)
-      { -0.5f, -0.5f, 0.0f,  0.0f, 1.0f }, //  |           |
-                                           //  |           |
-      { -0.5f, -0.5f, 0.0f,  0.0f, 1.0f }, //  |           |
-      { -0.5f,  0.5f, 0.0f,  0.0f, 0.0f }, //  |           |
-      {  0.5f,  0.5f, 0.0f,  1.0f, 0.0f }, //  +-----------+ UV = (1, 1), NDC=(1,-1)
+    VertexUVNormal verts[] = {
+      {  0.5f,  0.5f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f, 0.0f }, //  
+      {  0.5f, -0.5f, 0.0f,  1.0f, 1.0f, 0.0f, 0.0f, 0.0f }, //  +-----------+ UV = (1, 0), NDC=(1, 1)
+      { -0.5f, -0.5f, 0.0f,  0.0f, 1.0f, 0.0f, 0.0f, 0.0f }, //  |           |
+                                                             //  |           |
+      { -0.5f, -0.5f, 0.0f,  0.0f, 1.0f, 0.0f, 0.0f, 0.0f }, //  |           |
+      { -0.5f,  0.5f, 0.0f,  0.0f, 0.0f, 0.0f, 0.0f, 0.0f }, //  |           |
+      {  0.5f,  0.5f, 0.0f,  1.0f, 0.0f, 0.0f, 0.0f, 0.0f }, //  +-----------+ UV = (1, 1), NDC=(1,-1)
     };
     CE(g_device->CreateCommittedResource(
       &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
@@ -588,53 +599,53 @@ void InitAssets() {
     g_vb_unitsquare->Unmap(0, nullptr);
 
     g_vbv_unitsquare.BufferLocation = g_vb_unitsquare->GetGPUVirtualAddress();
-    g_vbv_unitsquare.StrideInBytes = sizeof(VertexAndUV);
+    g_vbv_unitsquare.StrideInBytes = sizeof(VertexUVNormal);
     g_vbv_unitsquare.SizeInBytes = sizeof(verts);
   }
 
   // Create vertex buffer & view for unit cube
   {
-    VertexAndUV verts[] = {
+    VertexUVNormal verts[] = {
       // -Z
-      {  0.5f,  0.5f, -0.5f,  1.0f, 0.0f }, //  
-      {  0.5f, -0.5f, -0.5f,  1.0f, 1.0f }, //  +-----------+ UV = (1, 0), NDC=(1, 1)
-      { -0.5f, -0.5f, -0.5f,  0.0f, 1.0f }, //  |           |
+      {  0.5f,  0.5f, -0.5f,  1.0f, 0.0f, 0.0f, 0.0f, -1.0f }, //  
+      {  0.5f, -0.5f, -0.5f,  1.0f, 1.0f, 0.0f, 0.0f, -1.0f }, //  +-----------+ UV = (1, 0), NDC=(1, 1)
+      { -0.5f, -0.5f, -0.5f,  0.0f, 1.0f, 0.0f, 0.0f, -1.0f }, //  |           |
                                             //  |    -Z     |
-      { -0.5f, -0.5f, -0.5f,  0.0f, 1.0f }, //  |           |
-      { -0.5f,  0.5f, -0.5f,  0.0f, 0.0f }, //  |           |
-      {  0.5f,  0.5f, -0.5f,  1.0f, 0.0f }, //  +-----------+ UV = (1, 1), NDC=(1,-1)
+      { -0.5f, -0.5f, -0.5f,  0.0f, 1.0f, 0.0f, 0.0f, -1.0f }, //  |           |
+      { -0.5f,  0.5f, -0.5f,  0.0f, 0.0f, 0.0f, 0.0f, -1.0f }, //  |           |
+      {  0.5f,  0.5f, -0.5f,  1.0f, 0.0f, 0.0f, 0.0f, -1.0f }, //  +-----------+ UV = (1, 1), NDC=(1,-1)
 
       // +X
-      { 0.5f,  0.5f,  0.5f, 1.0f, 0.0f },
-      { 0.5f, -0.5f,  0.5f, 1.0f, 1.0f },
-      { 0.5f, -0.5f, -0.5f, 0.0f, 1.0f },
-      { 0.5f, -0.5f, -0.5f, 0.0f, 1.0f },
-      { 0.5f,  0.5f, -0.5f, 0.0f, 0.0f },
-      { 0.5f,  0.5f,  0.5f, 1.0f, 0.0f },
+      { 0.5f,  0.5f,  0.5f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f },
+      { 0.5f, -0.5f,  0.5f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f },
+      { 0.5f, -0.5f, -0.5f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f },
+      { 0.5f, -0.5f, -0.5f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f },
+      { 0.5f,  0.5f, -0.5f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f },
+      { 0.5f,  0.5f,  0.5f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f },
 
       // -X
-      { -0.5f,  0.5f, -0.5f, 1.0f, 0.0f },
-      { -0.5f, -0.5f, -0.5f, 1.0f, 1.0f },
-      { -0.5f, -0.5f,  0.5f, 0.0f, 1.0f },
-      { -0.5f, -0.5f,  0.5f, 0.0f, 1.0f },
-      { -0.5f,  0.5f,  0.5f, 0.0f, 0.0f },
-      { -0.5f,  0.5f, -0.5f, 1.0f, 0.0f },
+      { -0.5f,  0.5f, -0.5f, 1.0f, 0.0f, -1.0f, 0.0f, 0.0f },
+      { -0.5f, -0.5f, -0.5f, 1.0f, 1.0f, -1.0f, 0.0f, 0.0f },
+      { -0.5f, -0.5f,  0.5f, 0.0f, 1.0f, -1.0f, 0.0f, 0.0f },
+      { -0.5f, -0.5f,  0.5f, 0.0f, 1.0f, -1.0f, 0.0f, 0.0f },
+      { -0.5f,  0.5f,  0.5f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f },
+      { -0.5f,  0.5f, -0.5f, 1.0f, 0.0f, -1.0f, 0.0f, 0.0f },
 
       // +Y
-      {  0.5f, 0.5f,  0.5f, 1.0f, 0.0f },
-      {  0.5f, 0.5f, -0.5f, 1.0f, 1.0f },
-      { -0.5f, 0.5f, -0.5f, 0.0f, 1.0f },
-      { -0.5f, 0.5f, -0.5f, 0.0f, 1.0f },
-      { -0.5f, 0.5f,  0.5f, 0.0f, 0.0f },
-      {  0.5f, 0.5f,  0.5f, 1.0f, 0.0f },
+      {  0.5f, 0.5f,  0.5f, 1.0f, 0.0f,  0.0f, 1.0f, 0.0f },
+      {  0.5f, 0.5f, -0.5f, 1.0f, 1.0f,  0.0f, 1.0f, 0.0f },
+      { -0.5f, 0.5f, -0.5f, 0.0f, 1.0f,  0.0f, 1.0f, 0.0f },
+      { -0.5f, 0.5f, -0.5f, 0.0f, 1.0f,  0.0f, 1.0f, 0.0f },
+      { -0.5f, 0.5f,  0.5f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f },
+      {  0.5f, 0.5f,  0.5f, 1.0f, 0.0f,  0.0f, 1.0f, 0.0f },
 
       // -Y
-      {  0.5f, -0.5f,  0.5f, 1.0f, 0.0f },
-      { -0.5f, -0.5f, -0.5f, 0.0f, 1.0f },
-      {  0.5f, -0.5f, -0.5f, 1.0f, 1.0f },
-      { -0.5f, -0.5f, -0.5f, 0.0f, 1.0f },
-      {  0.5f, -0.5f,  0.5f, 1.0f, 0.0f },
-      { -0.5f, -0.5f,  0.5f, 0.0f, 0.0f },
+      {  0.5f, -0.5f,  0.5f, 1.0f, 0.0f,  0.0f, -1.0f, 0.0f },
+      { -0.5f, -0.5f, -0.5f, 0.0f, 1.0f,  0.0f, -1.0f, 0.0f },
+      {  0.5f, -0.5f, -0.5f, 1.0f, 1.0f,  0.0f, -1.0f, 0.0f },
+      { -0.5f, -0.5f, -0.5f, 0.0f, 1.0f,  0.0f, -1.0f, 0.0f },
+      {  0.5f, -0.5f,  0.5f, 1.0f, 0.0f,  0.0f, -1.0f, 0.0f },
+      { -0.5f, -0.5f,  0.5f, 0.0f, 0.0f,  0.0f, -1.0f, 0.0f },
     };
 
     CE(g_device->CreateCommittedResource(
@@ -654,13 +665,21 @@ void InitAssets() {
     g_vb_unitcube->Unmap(0, nullptr);
 
     g_vbv_unitcube.BufferLocation = g_vb_unitcube->GetGPUVirtualAddress();
-    g_vbv_unitcube.StrideInBytes = sizeof(VertexAndUV);
+    g_vbv_unitcube.StrideInBytes = sizeof(VertexUVNormal);
     g_vbv_unitcube.SizeInBytes = sizeof(verts);
   }
 
   // Create vertex buffer & view for the full-screen quad
   {
-    VertexAndUV verts[] = {
+    VertexUV verts[] = {
+      {  1.0f,  1.0f, 0.0f,  1.0f, 0.0f }, //  
+      {  1.0f, -1.0f, 0.0f,  1.0f, 1.0f }, //  +-----------+ UV = (1, 0), NDC=(1, 1)
+      { -1.0f, -1.0f, 0.0f,  0.0f, 1.0f }, //  |           |
+                                           //  |           |
+      { -1.0f, -1.0f, 0.0f,  0.0f, 1.0f }, //  |           |
+      { -1.0f,  1.0f, 0.0f,  0.0f, 0.0f }, //  |           |
+      {  1.0f,  1.0f, 0.0f,  1.0f, 0.0f }, //  +-----------+ UV = (1, 1), NDC=(1,-1)
+
       {  1.0f,  1.0f, 0.0f,  1.0f, 0.0f }, //  
       {  1.0f, -1.0f, 0.0f,  1.0f, 1.0f }, //  +-----------+ UV = (1, 0), NDC=(1, 1)
       { -1.0f, -1.0f, 0.0f,  0.0f, 1.0f }, //  |           |
@@ -685,7 +704,7 @@ void InitAssets() {
     g_vb_fsquad->Unmap(0, nullptr);
 
     g_vbv_fsquad.BufferLocation = g_vb_fsquad->GetGPUVirtualAddress();
-    g_vbv_fsquad.StrideInBytes = sizeof(VertexAndUV);
+    g_vbv_fsquad.StrideInBytes = sizeof(VertexUV);
     g_vbv_fsquad.SizeInBytes = sizeof(verts);
   }
   

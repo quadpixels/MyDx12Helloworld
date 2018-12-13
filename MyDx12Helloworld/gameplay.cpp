@@ -320,7 +320,7 @@ void OnKeyDown(WPARAM wParam, LPARAM lParam) {
     g_playerState.facing = 1;
     g_playerState.is_right_pressed = true;
     g_dx += 1 * g_time_scale; break;
-  case 'Z':
+  case 'Z': case 'z': case VK_UP:
     g_playerState.Jump(370.0f);
     g_playerState.is_jump_pressed = true;
     break;
@@ -330,7 +330,7 @@ void OnKeyDown(WPARAM wParam, LPARAM lParam) {
   case VK_CAPITAL:
     g_showBoundingBox = !g_showBoundingBox;
     break;
-  case VK_SPACE: case 'X':
+  case VK_SPACE: case 'x': case 'X':
     LaunchProjectile();
     break;
   case '0':
@@ -342,17 +342,18 @@ void OnKeyDown(WPARAM wParam, LPARAM lParam) {
 
 void OnKeyUp(WPARAM wParam, LPARAM lParam) {
   switch (wParam) {
-  case VK_DOWN: case 's':
-    g_dy += 1 * g_time_scale; break;
-  case VK_UP: case 'w':
-    g_dy -= 1 * g_time_scale; break;
+  //case VK_DOWN: case 's':
+  //  g_dy += 1 * g_time_scale; break;
+  //case VK_UP: 
+  //case 'w':
+  //  g_dy -= 1 * g_time_scale; break;
   case VK_LEFT: case 'a':
     g_playerState.is_left_pressed = false;
     g_dx += 1 * g_time_scale; break;
   case VK_RIGHT: case 'd':
     g_playerState.is_right_pressed = false;
     g_dx -= 1 * g_time_scale; break;
-  case 'Z':
+  case VK_UP: case 'z': case'Z':
     g_playerState.is_jump_pressed = false;
     break;
   }
