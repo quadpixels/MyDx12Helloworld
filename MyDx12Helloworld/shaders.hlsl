@@ -38,7 +38,6 @@ SamplerState g_sampler : register(s0);
 PSInput VSMain(float4 position : POSITION, float4 uv : TEXCOORD, float3 normal : NORMAL)
 {
   PSInput result;
-  result.position.z = 0.0f;
   float min_wh = min(win_h, win_w);
   float half_h = h / 100;
   float half_w = w / 100;
@@ -48,7 +47,7 @@ PSInput VSMain(float4 position : POSITION, float4 uv : TEXCOORD, float3 normal :
   
   float3 normal_world = mul(orientation, normal);
 
-  result.position = mul(projection, mul(view, result.position));
+  result.position = mul(mul(projection, view), result.position);
   result.position.z /= 100.0f; // To make the depth between 0 and 1
   result.uv = uv.xy;
   result.normal = normal_world;

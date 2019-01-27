@@ -121,7 +121,6 @@ void do_ClearAndLoadLevel(const std::vector<std::vector<char> > m) {
       }
       case 2: {
         g_spriteInstances.push_back(new ItemInstance(px, py, 60, 60, g_spr3));
-        printf("item at %g,%g\n", px, py);
         break;
       }
       case 3: {
@@ -327,7 +326,7 @@ void OnKeyDown(WPARAM wParam, LPARAM lParam) {
   case VK_ESCAPE:
     PostQuitMessage(0);
     break;
-  case VK_CAPITAL:
+  case VK_BACK:
     g_showBoundingBox = !g_showBoundingBox;
     break;
   case VK_SPACE: case 'x': case 'X':

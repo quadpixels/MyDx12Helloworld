@@ -129,7 +129,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="d3dx12.h" />
+    <ClInclude Include="dx12stuff.h" />
     <ClInclude Include="Header.h" />
+    <ClInclude Include="dx11stuff.h" />
     <ClInclude Include="stdafx.h" />
     <ClInclude Include="WICTextureLoader12.h" />
   </ItemGroup>

@@ -45,6 +45,7 @@ PSInput VSMain(float4 position : POSITION, float4 uv : TEXCOORD)
     + float4(x / 100, y / 100, 0, 0); // Translation
 
   result.position = mul(projection, mul(view, result.position));
+  result.position.z /= 100.0f;
 
   result.uv = uv.xy;
 
