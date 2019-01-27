@@ -135,14 +135,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
   wc.lpfnWndProc = WndProc;
   wc.hInstance = hInstance;
   wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-  wc.lpszClassName = L"My DX 12 Helloworld";
+  if (DX_VER == 12) wc.lpszClassName = L"My DX 12 Helloworld";
+  else wc.lpszClassName = L"My DX 11 Helloworld";
   RegisterClassEx(&wc);
 
   RECT rect = { 0, 0, WIN_W, WIN_H };
   AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
   g_hwnd = CreateWindow(
     wc.lpszClassName,
-    L"My DX 12 Helloworld",
+    wc.lpszClassName, // Window Name
     WS_OVERLAPPEDWINDOW,
     CW_USEDEFAULT,
     CW_USEDEFAULT,

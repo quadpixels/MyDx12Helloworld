@@ -9,22 +9,33 @@ std::vector<ID3D11ShaderResourceView*> g_srvs11;
 ID3D11Texture2D* g_maincanvas11;
 ID3D11Texture2D* g_lightmask11;
 ID3D11Texture2D* g_depthbuffer11;
+ID3D11Texture2D* g_scatterlight11;
 ID3D11RenderTargetView* g_maincanvas11_rtv;
+ID3D11ShaderResourceView* g_maincanvas11_srv;
 ID3D11RenderTargetView* g_lightmask11_rtv;
+ID3D11ShaderResourceView* g_lightmask11_srv;
 ID3D11DepthStencilView* g_dsv11;
 ID3D11Buffer* g_constantbuffer_perscene11;
 ID3D11Buffer* g_constantbuffer_perobject11;
 ID3D11Buffer* g_constantbuffer_drawlight11;
+ID3D11Texture2D *g_backbuffer;
 ID3D11RenderTargetView* g_backbuffer_rtv11;
 D3D11_VIEWPORT g_viewport11;
 D3D11_RECT g_scissorrect11;
-ID3D11VertexShader* g_vs_objects11;
+ID3D11VertexShader *g_vs_objects11;
 ID3D11PixelShader* g_ps_objects11;
+ID3D11VertexShader *g_vs_drawlight11;
+ID3D11PixelShader* g_ps_drawlight11;
+ID3D11VertexShader* g_vs_lightmask11;
+ID3D11PixelShader* g_ps_lightmask11;
+ID3D11VertexShader* g_vs_combine11;
+ID3D11PixelShader* g_ps_combine11;
 ID3D11InputLayout* g_inputlayout_withnormal11;
 ID3D11InputLayout* g_inputlayout_nonormal11;
 ID3D11SamplerState* g_sampler11;
-ID3D11DepthStencilState* g_depthstencil11;
+ID3D11DepthStencilState* g_depthstencil11, *g_depthstencil_lightmask11;
 ID3D11RasterizerState* g_rasterizerstate11;
+ID3D11BlendState* g_blendstate11;
 
 void InitDevice11() {
   // 1. Create Device and Swap Chain
@@ -63,11 +74,10 @@ void InitDevice11() {
   assert(hr == S_OK);
   g_device11->GetImmediateContext1(&g_context11);
 
-  ID3D11Resource* backbuffer = nullptr;
-  hr = g_swapchain11->GetBuffer(0, IID_PPV_ARGS(&backbuffer));
+  hr = g_swapchain11->GetBuffer(0, IID_PPV_ARGS(&g_backbuffer));
   assert(SUCCEEDED(hr));
 
-  hr = g_device11->CreateRenderTargetView(backbuffer, nullptr, &g_backbuffer_rtv11);
+  hr = g_device11->CreateRenderTargetView(g_backbuffer, nullptr, &g_backbuffer_rtv11);
   assert(SUCCEEDED(hr));
 
   g_viewport11.Height = WIN_H;
@@ -105,18 +115,27 @@ void InitAssets11() {
 
   CE(D3DCompileFromFile(L"shaders_mask.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &g_VS2, &error));
   if (error) printf("Error compiling VS: %s\n", (char*)error->GetBufferPointer());
+  result = g_device11->CreateVertexShader(g_VS2->GetBufferPointer(), g_VS2->GetBufferSize(), nullptr, &g_vs_lightmask11);
   CE(D3DCompileFromFile(L"shaders_mask.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &g_PS2, &error));
   if (error) printf("Error compiling PS: %s\n", (char*)error->GetBufferPointer());
+  result = g_device11->CreatePixelShader(g_PS2->GetBufferPointer(), g_PS2->GetBufferSize(), nullptr, &g_ps_lightmask11);
+
 
   CE(D3DCompileFromFile(L"shaders_combine.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &g_VS_combine, &error));
   if (error) printf("Error compiling VS: %s\n", (char*)error->GetBufferPointer());
+  result = g_device11->CreateVertexShader(g_VS_combine->GetBufferPointer(), g_VS_combine->GetBufferSize(), nullptr, &g_vs_combine11);
   CE(D3DCompileFromFile(L"shaders_combine.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &g_PS_combine, &error));
   if (error) printf("Error compiling PS: %s\n", (char*)error->GetBufferPointer());
+  result = g_device11->CreatePixelShader(g_PS_combine->GetBufferPointer(), g_PS_combine->GetBufferSize(), nullptr, &g_ps_combine11);
 
   CE(D3DCompileFromFile(L"shaders_drawlight.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &g_VS_drawlight, &error));
   if (error) printf("Error compiling VS: %s\n", (char*)error->GetBufferPointer());
+  result = g_device11->CreateVertexShader(g_VS_drawlight->GetBufferPointer(), g_VS_drawlight->GetBufferSize(), nullptr, &g_vs_drawlight11);
+  assert(SUCCEEDED(result));
   CE(D3DCompileFromFile(L"shaders_drawlight.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &g_PS_drawlight, &error));
   if (error) printf("Error compiling PS: %s\n", (char*)error->GetBufferPointer());
+  result = g_device11->CreatePixelShader(g_PS_drawlight->GetBufferPointer(), g_PS_drawlight->GetBufferSize(), nullptr, &g_ps_drawlight11);
+  assert(SUCCEEDED(result));
 
   {
     VertexUVNormal verts[] = {
@@ -264,14 +283,20 @@ void InitAssets11() {
     assert(SUCCEEDED(result));
   }
 
-  // Depth-Stencil State
+  // Depth-Stencil States
   {
+    // For the color buffer ...
     D3D11_DEPTH_STENCIL_DESC dsd = { };
     dsd.DepthEnable = true;
     dsd.StencilEnable = false;
     dsd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
     dsd.DepthFunc = D3D11_COMPARISON_LESS;
     HRESULT result = g_device11->CreateDepthStencilState(&dsd, &g_depthstencil11);
+    assert(SUCCEEDED(result));
+
+    // For the light mask.
+    dsd.DepthFunc = D3D11_COMPARISON_ALWAYS;
+    result = g_device11->CreateDepthStencilState(&dsd, &g_depthstencil_lightmask11);
     assert(SUCCEEDED(result));
   }
 
@@ -284,6 +309,22 @@ void InitAssets11() {
     rsd.DepthClipEnable = true;
     HRESULT result = g_device11->CreateRasterizerState(&rsd, &g_rasterizerstate11);
     assert(SUCCEEDED(result));
+  }
+
+  // Blend state
+  {
+    D3D11_BLEND_DESC bd = { };
+    bd.AlphaToCoverageEnable = false;
+    bd.IndependentBlendEnable = false;
+    bd.RenderTarget[0].BlendEnable = true;
+    bd.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+    bd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_SRC_ALPHA;
+    bd.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+    bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+    bd.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+    bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    HRESULT result = g_device11->CreateBlendState(&bd, &g_blendstate11);
   }
 }
 
@@ -342,7 +383,12 @@ void InitTextureAndSRVs11() {
     rtv_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
 
-    // Main canvas resource & main canvas RTV
+    D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = { };
+    srv_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srv_desc.Texture2D.MipLevels = 1;
+
+    // Main canvas resource & main canvas RTV & Main canvas SRV
     HRESULT result;
     result = g_device11->CreateTexture2D(&t2d, nullptr, &g_maincanvas11);
     assert(SUCCEEDED(result));
@@ -350,11 +396,17 @@ void InitTextureAndSRVs11() {
     result = g_device11->CreateRenderTargetView(g_maincanvas11, &rtv_desc, &g_maincanvas11_rtv);
     assert(SUCCEEDED(result));
 
-    // Light mask resource & light mask RTV
+    result = g_device11->CreateShaderResourceView(g_maincanvas11, &srv_desc, &g_maincanvas11_srv);
+    assert(SUCCEEDED(result));
+
+    // Light mask resource & light mask RTV & light mask SRV
     result = g_device11->CreateTexture2D(&t2d, nullptr, &g_lightmask11);
     assert(SUCCEEDED(result));
 
     result = g_device11->CreateRenderTargetView(g_lightmask11, &rtv_desc, &g_lightmask11_rtv);
+    assert(SUCCEEDED(result));
+
+    result = g_device11->CreateShaderResourceView(g_lightmask11, &srv_desc, &g_lightmask11_srv);
     assert(SUCCEEDED(result));
   }
 
@@ -461,8 +513,8 @@ void Update_DX11() {
 
 void Render_DX11() {
   g_context11->ClearDepthStencilView(g_dsv11, D3D11_CLEAR_DEPTH, 1.0f, 0);
-  g_context11->OMSetRenderTargets(1, &g_backbuffer_rtv11, g_dsv11);
-  g_context11->ClearRenderTargetView(g_backbuffer_rtv11, g_scene_background);
+  g_context11->OMSetRenderTargets(1, &g_maincanvas11_rtv, g_dsv11);
+  g_context11->ClearRenderTargetView(g_maincanvas11_rtv, g_scene_background);
   g_context11->PSSetSamplers(0, 1, &g_sampler11);
   g_context11->OMSetDepthStencilState(g_depthstencil11, 0);
   g_context11->RSSetState(g_rasterizerstate11);
@@ -476,6 +528,7 @@ void Render_DX11() {
   g_context11->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
   g_context11->IASetInputLayout(g_inputlayout_withnormal11);
 
+  // Base Pass
   for (int i = 0; i < N; i++) {
     SpriteInstance* pSprInst = g_spriteInstances.at(i);
     if (pSprInst->Visible() == false) continue;
@@ -504,5 +557,74 @@ void Render_DX11() {
     g_context11->Draw(num_verts, 0);
   }
 
+  // Render Light
+  {
+    // 1. Light Source
+    g_context11->OMSetRenderTargets(1, &g_lightmask11_rtv, nullptr);
+    float zeros[] = { 0,0,0,0 };
+    g_context11->ClearRenderTargetView(g_lightmask11_rtv, zeros);
+    UINT zero = 0;
+    UINT stride = sizeof(VertexUV);
+    g_context11->IASetVertexBuffers(0, 1, &g_vb_fsquad11, &stride, &zero);
+    g_context11->PSSetConstantBuffers(0, 1, &g_constantbuffer_drawlight11);
+    g_context11->PSSetShaderResources(0, 0, nullptr);
+    g_context11->VSSetShader(g_vs_drawlight11, nullptr, 0);
+    g_context11->PSSetShader(g_ps_drawlight11, nullptr, 0);
+    g_context11->Draw(6, 0);
+
+    // 2. Light blocked by objects
+    g_context11->OMSetRenderTargets(1, &g_lightmask11_rtv, g_dsv11);
+    g_context11->OMSetDepthStencilState(g_depthstencil_lightmask11, 0);
+    g_context11->VSSetShader(g_vs_lightmask11, nullptr, 0);
+    g_context11->VSSetConstantBuffers(1, 1, &g_constantbuffer_perscene11);
+    g_context11->PSSetShader(g_ps_lightmask11, nullptr, 0);
+    for (int i = 0; i < N; i++) {
+      SpriteInstance* pSprInst = g_spriteInstances.at(i);
+      if (pSprInst->Visible() == false) continue;
+      const int textureId = pSprInst->pSprite->textureId;
+
+      int num_verts = 0;
+      {
+        UINT zero = 0;
+        const UINT stride = sizeof(VertexUVNormal); // Strides are the same for the 2 kinds of vertices
+        if (IsWallTexture(textureId)) {
+          g_context11->IASetVertexBuffers(0, 1, &g_vb_unitcube11, &stride, &zero);
+          num_verts = 30;
+        }
+        else {
+          g_context11->IASetVertexBuffers(0, 1, &g_vb_unitsquare11, &stride, &zero);
+          num_verts = 6;
+        }
+      }
+      g_context11->PSSetShaderResources(0, 1, &g_srvs11.at(textureId));
+      const UINT one = 16;
+      const UINT offset = i * 16; // Alignment = 256 B = 16 float4's
+      g_context11->VSSetConstantBuffers1(0, 1, &g_constantbuffer_perobject11, &offset, &one);
+      g_context11->PSSetConstantBuffers1(0, 1, &g_constantbuffer_perobject11, &offset, &one);
+      g_context11->Draw(num_verts, 0);
+    }
+  }
+
+  // 3. Combine & Render the Light-Scatter
+  {
+    float zero4[] = { 0,0,0,0 };
+    g_context11->ClearRenderTargetView(g_backbuffer_rtv11, zero4);
+    g_context11->OMSetRenderTargets(1, &g_backbuffer_rtv11, nullptr);
+    g_context11->VSSetShader(g_vs_combine11, nullptr, 0);
+    g_context11->PSSetShader(g_ps_combine11, nullptr, 0);
+    UINT stride = sizeof(VertexUV), zero = 0;
+    g_context11->IASetVertexBuffers(0, 1, &g_vb_fsquad11, &stride, &zero);
+    ID3D11ShaderResourceView* srvs[] = { g_maincanvas11_srv, g_lightmask11_srv };
+    g_context11->PSSetShaderResources(0, 2, srvs);
+    g_context11->PSSetConstantBuffers(0, 1, &g_constantbuffer_drawlight11);
+    g_context11->Draw(6, 0);
+  }
+
+  // Unbind
+  {
+    ID3D11ShaderResourceView* nullsrvs[] = { nullptr, nullptr };
+    g_context11->PSSetShaderResources(0, 2, nullsrvs);
+  }
+ 
   g_swapchain11->Present(1, 0);
 }

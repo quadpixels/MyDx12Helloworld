@@ -937,7 +937,7 @@ void Render_DX12() {
   g_commandqueue->ExecuteCommandLists(1, (ID3D12CommandList* const*)(&g_commandlist_bb));
 
   {
-    // Render light
+    // Render Light Source Map
     g_commandlist->Reset(g_commandallocator, g_pipelinestate_drawlight);
     g_commandlist->SetGraphicsRootSignature(g_rootsignature_drawlight);
     g_commandlist->SetDescriptorHeaps(_countof(ppHeaps), ppHeaps);
