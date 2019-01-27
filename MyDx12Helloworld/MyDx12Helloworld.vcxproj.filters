@@ -44,6 +44,12 @@
     <ClInclude Include="Header.h">
       <Filter>Source Files</Filter>
     </ClInclude>
+    <ClInclude Include="dx11stuff.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
+    <ClInclude Include="dx12stuff.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="shaders.hlsl">
