@@ -5,6 +5,7 @@ IDXGISwapChain* g_swapchain11;
 ID3D11Buffer* g_vb_unitsquare11;
 ID3D11Buffer* g_vb_unitcube11;
 ID3D11Buffer* g_vb_fsquad11;
+ID3D11Buffer* g_vb_boundingbox11;
 std::vector<ID3D11ShaderResourceView*> g_srvs11;
 ID3D11Texture2D* g_maincanvas11;
 ID3D11Texture2D* g_lightmask11;
@@ -22,6 +23,8 @@ ID3D11Texture2D *g_backbuffer;
 ID3D11RenderTargetView* g_backbuffer_rtv11;
 D3D11_VIEWPORT g_viewport11;
 D3D11_RECT g_scissorrect11;
+ID3D11InputLayout* g_inputlayout_withnormal11;
+ID3D11InputLayout* g_inputlayout_nonormal11;
 ID3D11VertexShader *g_vs_objects11;
 ID3D11PixelShader* g_ps_objects11;
 ID3D11VertexShader *g_vs_drawlight11;
@@ -30,10 +33,12 @@ ID3D11VertexShader* g_vs_lightmask11;
 ID3D11PixelShader* g_ps_lightmask11;
 ID3D11VertexShader* g_vs_combine11;
 ID3D11PixelShader* g_ps_combine11;
-ID3D11InputLayout* g_inputlayout_withnormal11;
-ID3D11InputLayout* g_inputlayout_nonormal11;
+ID3D11InputLayout* g_inputlayout_boundingbox11;
+ID3D11VertexShader* g_vs_boundingbox11;
+ID3D11GeometryShader* g_gs_boundingbox11;
+ID3D11PixelShader* g_ps_boundingbox11;
 ID3D11SamplerState* g_sampler11;
-ID3D11DepthStencilState* g_depthstencil11, *g_depthstencil_lightmask11;
+ID3D11DepthStencilState* g_depthstencil11, *g_depthstencil_lightmask11, *g_depthstencil_bb11;
 ID3D11RasterizerState* g_rasterizerstate11;
 ID3D11BlendState* g_blendstate11;
 
@@ -106,12 +111,18 @@ void InitAssets11() {
   if (error) printf("Error compiling PS: %s\n", (char*)error->GetBufferPointer());
   result = g_device11->CreatePixelShader(g_PS->GetBufferPointer(), g_PS->GetBufferSize(), nullptr, &g_ps_objects11);
 
-  CE(D3DCompileFromFile(L"shader_polygon.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &g_VS1, &error));
+  CE(D3DCompileFromFile(L"shader_polygon.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &g_VS_boundingbox, &error));
   if (error) printf("Error compiling VS: %s\n", (char*)error->GetBufferPointer());
-  CE(D3DCompileFromFile(L"shader_polygon.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &g_PS1, &error));
+  result = g_device11->CreateVertexShader(g_VS_boundingbox->GetBufferPointer(), g_VS_boundingbox->GetBufferSize(), nullptr, &g_vs_boundingbox11);
+  assert(SUCCEEDED(result));
+  CE(D3DCompileFromFile(L"shader_polygon.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &g_PS_boundingbox, &error));
+  result = g_device11->CreatePixelShader(g_PS_boundingbox->GetBufferPointer(), g_PS_boundingbox->GetBufferSize(), nullptr, &g_ps_boundingbox11);
+  assert(SUCCEEDED(result));
   if (error) printf("Error compiling PS: %s\n", (char*)error->GetBufferPointer());
-  CE(D3DCompileFromFile(L"shader_polygon.hlsl", nullptr, nullptr, "GSMain", "gs_5_0", compileFlags, 0, &g_GS1, &error));
+  CE(D3DCompileFromFile(L"shader_polygon.hlsl", nullptr, nullptr, "GSMain", "gs_5_0", compileFlags, 0, &g_GS_boundingbox, &error));
   if (error) printf("Error compiling GS: %s\n", (char*)error->GetBufferPointer());
+  result = g_device11->CreateGeometryShader(g_GS_boundingbox->GetBufferPointer(), g_GS_boundingbox->GetBufferSize(), nullptr, &g_gs_boundingbox11);
+  assert(SUCCEEDED(result));
 
   CE(D3DCompileFromFile(L"shaders_mask.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &g_VS2, &error));
   if (error) printf("Error compiling VS: %s\n", (char*)error->GetBufferPointer());
@@ -167,7 +178,7 @@ void InitAssets11() {
       {  0.5f,  0.5f, -0.5f,  1.0f, 0.0f, 0.0f, 0.0f, -1.0f }, //  
       {  0.5f, -0.5f, -0.5f,  1.0f, 1.0f, 0.0f, 0.0f, -1.0f }, //  +-----------+ UV = (1, 0), NDC=(1, 1)
       { -0.5f, -0.5f, -0.5f,  0.0f, 1.0f, 0.0f, 0.0f, -1.0f }, //  |           |
-                                            //  |    -Z     |
+                                                               //  |    -Z     |
       { -0.5f, -0.5f, -0.5f,  0.0f, 1.0f, 0.0f, 0.0f, -1.0f }, //  |           |
       { -0.5f,  0.5f, -0.5f,  0.0f, 0.0f, 0.0f, 0.0f, -1.0f }, //  |           |
       {  0.5f,  0.5f, -0.5f,  1.0f, 0.0f, 0.0f, 0.0f, -1.0f }, //  +-----------+ UV = (1, 1), NDC=(1,-1)
@@ -250,6 +261,35 @@ void InitAssets11() {
     assert(SUCCEEDED(hr));
   }
 
+  {
+    const float EPS = 0.05f;
+    VertexAndColor verts[] = { // Treat as trianglez
+      { 0.5f,  0.5f, 0.0f,  1.0f, 0.0, 0.0f, 1.0f },     //    --+ 右
+      { 0.5f, -0.5f, 0.0f,  1.0f, 1.0f, 0.0f, 1.0f },    //     \|
+      { 0.5f - EPS,  0.5f, 0.0f,  1.0f, 0.0, 0.0f, 1.0f }, //    |
+
+      { 0.5f, -0.5f, 0.0f,  1.0f, 1.0f, 0.0f, 1.0f },      //
+      { -0.5f, -0.5f, 0.0f,  0.0f, 1.0f, 0.0f, 1.0f },     //     __-  下
+      { 0.5f, -0.5f + EPS, 0.0f,  1.0f, 1.0f, 0.0f, 1.0f },// ------+
+
+      { -0.5f, -0.5f, 0.0f,  0.0f, 1.0f, 0.0f, 1.0f },      //   |
+      { -0.5f,  0.5f, 0.0f,  1.0f, 0.0f, 0.0f, 1.0f },      //   |\   左
+      { -0.5f + EPS, -0.5f, 0.0f,  0.0f, 1.0f, 0.0f, 1.0f },//   +--
+
+      { -0.5f,  0.5f, 0.0f,  1.0f, 0.0f, 0.0f, 1.0f },      //
+      { 0.5f,  0.5f, 0.0f,  1.0f, 0.0, 0.0f, 1.0f },        //   +------   上
+      { -0.5f,  0.5f - EPS, 0.0f,  1.0f, 0.0f, 0.0f, 1.0f },//   ---
+    };
+    D3D11_BUFFER_DESC desc = { };
+    desc.ByteWidth = sizeof(verts);
+    desc.Usage = D3D11_USAGE_IMMUTABLE;
+    desc.StructureByteStride = sizeof(VertexAndColor);
+    desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA srd = { };
+    srd.pSysMem = verts;
+    assert(SUCCEEDED(g_device11->CreateBuffer(&desc, &srd, &g_vb_boundingbox11)));
+  }
+
   // Input Layouts
   {
     D3D11_INPUT_ELEMENT_DESC inputdesc1[] = {
@@ -264,8 +304,13 @@ void InitAssets11() {
       { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
       { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 }
     };
-    result = g_device11->CreateInputLayout(inputdesc1, 2, g_VS_combine->GetBufferPointer(), g_VS_combine->GetBufferSize(), &g_inputlayout_nonormal11);
-    assert(SUCCEEDED(result));
+    assert(SUCCEEDED(g_device11->CreateInputLayout(inputdesc1, 2, g_VS_combine->GetBufferPointer(), g_VS_combine->GetBufferSize(), &g_inputlayout_nonormal11)));
+
+    D3D11_INPUT_ELEMENT_DESC inputdesc3[] = {
+      { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+      { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 }
+    };
+    assert(SUCCEEDED(g_device11->CreateInputLayout(inputdesc3, 2, g_VS_boundingbox->GetBufferPointer(), g_VS_boundingbox->GetBufferSize(), &g_inputlayout_boundingbox11)));
   }
 
   // Sampler State
@@ -291,13 +336,16 @@ void InitAssets11() {
     dsd.StencilEnable = false;
     dsd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
     dsd.DepthFunc = D3D11_COMPARISON_LESS;
-    HRESULT result = g_device11->CreateDepthStencilState(&dsd, &g_depthstencil11);
-    assert(SUCCEEDED(result));
+    assert(SUCCEEDED(g_device11->CreateDepthStencilState(&dsd, &g_depthstencil11)));
+
+    dsd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+    dsd.DepthFunc = D3D11_COMPARISON_ALWAYS;
+    assert(SUCCEEDED(g_device11->CreateDepthStencilState(&dsd, &g_depthstencil_bb11)));
 
     // For the light mask.
+    dsd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
     dsd.DepthFunc = D3D11_COMPARISON_ALWAYS;
-    result = g_device11->CreateDepthStencilState(&dsd, &g_depthstencil_lightmask11);
-    assert(SUCCEEDED(result));
+    assert(SUCCEEDED(g_device11->CreateDepthStencilState(&dsd, &g_depthstencil_lightmask11)));
   }
 
   // Rasterizer State
@@ -368,9 +416,11 @@ void InitTextureAndSRVs11() {
 
   // Main canvas and light mask
   {
+    DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM;
+
     D3D11_TEXTURE2D_DESC t2d = { };
     t2d.MipLevels = 1;
-    t2d.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    t2d.Format = format;
     t2d.Width = WIN_W;
     t2d.Height = WIN_H;
     t2d.ArraySize = 1;
@@ -380,11 +430,11 @@ void InitTextureAndSRVs11() {
     t2d.Usage = D3D11_USAGE_DEFAULT;
 
     D3D11_RENDER_TARGET_VIEW_DESC rtv_desc = { };
-    rtv_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    rtv_desc.Format = format;
     rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
 
     D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = { };
-    srv_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    srv_desc.Format = format;
     srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
     srv_desc.Texture2D.MipLevels = 1;
 
@@ -550,11 +600,38 @@ void Render_DX11() {
     }
 
     g_context11->PSSetShaderResources(0, 1, &g_srvs11.at(textureId));
-    const UINT one = 16;
+    const UINT one = 16; // one = 1x float4, 16 = 16 x float4's
     const UINT offset = i * 16; // Alignment = 256 B = 16 float4's
     g_context11->VSSetConstantBuffers1(0, 1, &g_constantbuffer_perobject11, &offset, &one);
     g_context11->PSSetConstantBuffers1(0, 1, &g_constantbuffer_perobject11, &offset, &one);
     g_context11->Draw(num_verts, 0);
+  }
+
+  // Bounding Boxes
+  if (g_showBoundingBox) {
+    g_context11->OMSetRenderTargets(1, &g_maincanvas11_rtv, g_dsv11);
+    g_context11->OMSetDepthStencilState(g_depthstencil_bb11, 0);
+    g_context11->VSSetShader(g_vs_boundingbox11, nullptr, 0);
+    g_context11->GSSetShader(g_gs_boundingbox11, nullptr, 0);
+    g_context11->PSSetShader(g_ps_boundingbox11, nullptr, 0);
+    UINT zero = 0;
+    UINT stride = sizeof(VertexAndColor);
+    g_context11->IASetVertexBuffers(0, 1, &g_vb_boundingbox11, &stride, &zero);
+    ID3D11ShaderResourceView* nullsrv = nullptr;
+    g_context11->PSSetShaderResources(0, 1, &nullsrv);
+    for (int i = 0; i < N; i++) {
+      SpriteInstance* pSprInst = g_spriteInstances.at(i);
+      if (pSprInst->Visible() == false) continue;
+      
+      const UINT one = 16; //
+      const UINT offset = i * 16; // A
+      g_context11->VSSetConstantBuffers1(0, 1, &g_constantbuffer_perobject11, &offset, &one);
+      g_context11->PSSetConstantBuffers1(0, 1, &g_constantbuffer_perobject11, &offset, &one);
+      g_context11->Draw(12, 0);
+    }
+    g_context11->VSSetShader(nullptr, nullptr, 0);
+    g_context11->GSSetShader(nullptr, nullptr, 0);
+    g_context11->PSSetShader(nullptr, nullptr, 0);
   }
 
   // Render Light

@@ -331,11 +331,11 @@ void InitAssets() {
   CE(D3DCompileFromFile(L"shaders.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &g_PS, &error));
   if (error) printf("Error compiling PS: %s\n", (char*)error->GetBufferPointer());
 
-  CE(D3DCompileFromFile(L"shader_polygon.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &g_VS1, &error));
+  CE(D3DCompileFromFile(L"shader_polygon.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &g_VS_boundingbox, &error));
   if (error) printf("Error compiling VS: %s\n", (char*)error->GetBufferPointer());
-  CE(D3DCompileFromFile(L"shader_polygon.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &g_PS1, &error));
+  CE(D3DCompileFromFile(L"shader_polygon.hlsl", nullptr, nullptr, "PSMain", "ps_5_0", compileFlags, 0, &g_PS_boundingbox, &error));
   if (error) printf("Error compiling PS: %s\n", (char*)error->GetBufferPointer());
-  CE(D3DCompileFromFile(L"shader_polygon.hlsl", nullptr, nullptr, "GSMain", "gs_5_0", compileFlags, 0, &g_GS1, &error));
+  CE(D3DCompileFromFile(L"shader_polygon.hlsl", nullptr, nullptr, "GSMain", "gs_5_0", compileFlags, 0, &g_GS_boundingbox, &error));
   if (error) printf("Error compiling GS: %s\n", (char*)error->GetBufferPointer());
 
   CE(D3DCompileFromFile(L"shaders_mask.hlsl", nullptr, nullptr, "VSMain", "vs_5_0", compileFlags, 0, &g_VS2, &error));
@@ -414,9 +414,9 @@ void InitAssets() {
     { "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 } // May cause error in CreateGraphicsPipelineState
   };
 
-  psoDesc.VS = CD3DX12_SHADER_BYTECODE(g_VS1);
-  psoDesc.PS = CD3DX12_SHADER_BYTECODE(g_PS1);
-  psoDesc.GS = CD3DX12_SHADER_BYTECODE(g_GS1);
+  psoDesc.VS = CD3DX12_SHADER_BYTECODE(g_VS_boundingbox);
+  psoDesc.PS = CD3DX12_SHADER_BYTECODE(g_PS_boundingbox);
+  psoDesc.GS = CD3DX12_SHADER_BYTECODE(g_GS_boundingbox);
   psoDesc.InputLayout = { inputElementDescs1, _countof(inputElementDescs1) };
   psoDesc.RasterizerState.AntialiasedLineEnable = true;
 
@@ -589,22 +589,22 @@ void InitAssets() {
   }
 
   {
-    const float EPS = 0.007f;
+    const float EPS = 0.05f;
     VertexAndColor verts[] = { // Treat as trianglez
-      { 0.5f,  0.5f, 0.0f,  1.0f, 0.0, 0.0f, 1.0f },     //     -+ 右
+      { 0.5f,  0.5f, 0.0f,  1.0f, 0.0, 0.0f, 1.0f },     //    --+ 右
       { 0.5f, -0.5f, 0.0f,  1.0f, 1.0f, 0.0f, 1.0f },    //     \|
-      { 0.5f - EPS,  0.5f, 0.0f,  1.0f, 0.0, 0.0f, 1.0f }, //      |
+      { 0.5f - EPS,  0.5f, 0.0f,  1.0f, 0.0, 0.0f, 1.0f }, //    |
 
-      { 0.5f, -0.5f, 0.0f,  1.0f, 1.0f, 0.0f, 1.0f },    //
-      { -0.5f, -0.5f, 0.0f,  0.0f, 1.0f, 0.0f, 1.0f },   //       __-  下
-      { 0.5f, -0.5f + EPS, 0.0f,  1.0f, 1.0f, 0.0f, 1.0f },//   ------+
+      { 0.5f, -0.5f, 0.0f,  1.0f, 1.0f, 0.0f, 1.0f },      //
+      { -0.5f, -0.5f, 0.0f,  0.0f, 1.0f, 0.0f, 1.0f },     //     __-  下
+      { 0.5f, -0.5f + EPS, 0.0f,  1.0f, 1.0f, 0.0f, 1.0f },// ------+
 
-      { -0.5f, -0.5f, 0.0f,  0.0f, 1.0f, 0.0f, 1.0f },    //   |
-      { -0.5f,  0.5f, 0.0f,  1.0f, 0.0f, 0.0f, 1.0f },    //   |\   左
-      { -0.5f + EPS, -0.5f, 0.0f,  0.0f, 1.0f, 0.0f, 1.0f },//   +-
+      { -0.5f, -0.5f, 0.0f,  0.0f, 1.0f, 0.0f, 1.0f },      //   |
+      { -0.5f,  0.5f, 0.0f,  1.0f, 0.0f, 0.0f, 1.0f },      //   |\   左
+      { -0.5f + EPS, -0.5f, 0.0f,  0.0f, 1.0f, 0.0f, 1.0f },//   +--
 
-      { -0.5f,  0.5f, 0.0f,  1.0f, 0.0f, 0.0f, 1.0f },    //
-      { 0.5f,  0.5f, 0.0f,  1.0f, 0.0, 0.0f, 1.0f },      //   +------   上
+      { -0.5f,  0.5f, 0.0f,  1.0f, 0.0f, 0.0f, 1.0f },      //
+      { 0.5f,  0.5f, 0.0f,  1.0f, 0.0, 0.0f, 1.0f },        //   +------   上
       { -0.5f,  0.5f - EPS, 0.0f,  1.0f, 0.0f, 0.0f, 1.0f },//   ---
     };
     CE(g_device->CreateCommittedResource(
@@ -892,8 +892,6 @@ void Render_DX12() {
     g_commandlist_bb->SetGraphicsRootDescriptorTable(0, gpuSrvHandle);
     g_commandlist_bb->SetGraphicsRootConstantBufferView(1, g_constantbuffer->GetGPUVirtualAddress());
     g_commandlist_bb->SetGraphicsRootConstantBufferView(2, g_constantbuffer->GetGPUVirtualAddress());
-
-    g_commandlist_bb->DrawInstanced(12, 1, 0, 0);
   }
 
   const size_t N = g_spriteInstances.size();
@@ -926,7 +924,7 @@ void Render_DX12() {
 
     if (g_showBoundingBox) {
       g_commandlist_bb->SetGraphicsRootConstantBufferView(1, g_constantbuffer->GetGPUVirtualAddress() + ALIGN * (1 + i)); // the CB is in slot 1 of the root signature...
-      g_commandlist_bb->DrawInstanced(num_verts, 1, 0, 0);
+      g_commandlist_bb->DrawInstanced(12, 1, 0, 0); // BB always 12 vertices (3 vertices per side)
     }
   }
 

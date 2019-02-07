@@ -40,14 +40,16 @@ PSInput VSMain(float4 position : POSITION, float4 color : COLOR)
 {
   PSInput result;
 
-  float half_h = h / 100 * 2.0f;
-  float half_w = w / 100 * 2.0f;
+  float min_wh = min(win_h, win_w);
+  float half_h = h / 100;
+  float half_w = w / 100;
   result.position = mul(orientation, position)  // Unit square
     * float4(half_w, half_h, 1.0f, 1.0f) // Aspect ratio correction
-    + float4(x / (100 / 2), y / (100 / 2), 0, 0); // Translation
+    + float4(x / 100, y / 100, 0, 0); // Translation
   result.color = color;
 
   result.position = mul(projection, mul(view, result.position));
+  result.position.z /= 100.0f;
 
   return result;
 }
@@ -63,6 +65,7 @@ void GSMain(triangle GSInput input[3],
 
   PSInput ret;
 
+  
   ret = input[0];
   ret.color = float4(0.0f, 1.0f, 1.0f, 1.0f);
   triStream.Append(ret);
@@ -75,7 +78,7 @@ void GSMain(triangle GSInput input[3],
   ret.color = float4(0.0f, 1.0f, 1.0f, 1.0f);
   triStream.Append(ret);
 
-  triStream.RestartStrip(); // 这个strip已经完成，前进至下一个strip
+  triStream.RestartStrip(); // 杩欎釜strip宸茬粡瀹屾垚锛屽墠杩涜嚦涓嬩竴涓猻trip
 
   float4 mid = (input[1].position + input[2].position) * 0.5f;
   float4 mirrored = mid * 2.0f - input[0].position;

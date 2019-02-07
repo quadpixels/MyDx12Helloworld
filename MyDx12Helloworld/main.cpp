@@ -107,7 +107,7 @@ unsigned char* LoadTexture(LPCWSTR file_name, UINT* w, UINT* h) {
 
 // Shared between for DX 11 & 12
 ID3DBlob* g_VS, *g_PS;
-ID3DBlob* g_VS1, *g_PS1, *g_GS1;
+ID3DBlob* g_VS_boundingbox, *g_PS_boundingbox, *g_GS_boundingbox;
 ID3DBlob* g_VS2, *g_PS2;
 ID3DBlob *g_VS_combine, *g_PS_combine;
 ID3DBlob *g_VS_drawlight, *g_PS_drawlight;

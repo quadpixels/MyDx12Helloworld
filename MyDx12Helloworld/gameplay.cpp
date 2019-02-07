@@ -326,7 +326,7 @@ void OnKeyDown(WPARAM wParam, LPARAM lParam) {
   case VK_ESCAPE:
     PostQuitMessage(0);
     break;
-  case VK_CAPITAL:
+  case VK_BACK:
     g_showBoundingBox = !g_showBoundingBox;
     break;
   case VK_SPACE: case 'x': case 'X':
