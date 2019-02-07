@@ -13,6 +13,7 @@
 struct PerSceneCBData {
   DirectX::XMMATRIX view;
   DirectX::XMMATRIX projection;
+  float win_w, win_h;
 };
 
 enum SceneState {

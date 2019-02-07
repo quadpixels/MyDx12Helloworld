@@ -46,7 +46,7 @@ struct ConstantBufferData {
   ConstantBufferData() {
     x = y = w = h = win_w = win_h = 0.0f;
   }
-  float x, y;
+  float x, y, z;
   float w, h; // width & height in pixels
   float win_w, win_h; // window w & h
   DirectX::XMMATRIX orientation;
@@ -116,7 +116,7 @@ float g_scene_background[] = { 0.5f, 0.5f, 0.7f, 1.0f };
 #include "dx11stuff.h"
 #include "dx12stuff.h"
 
-int DX_VER = 11;
+int DX_VER = 12;
 
 // D3D12
 

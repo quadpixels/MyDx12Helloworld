@@ -20,14 +20,14 @@ cbuffer PerSceneCB : register(b1)
 {
   float4x4 view;
   float4x4 projection;
+  float win_w, win_h;
 }
 
 // Add this: NULL error
 cbuffer PerObjectCB : register(b0)
 {
-  float x, y;
+  float x, y, z;
   float w, h;
-  float win_w, win_h;
   float4x4 orientation;
 };
 

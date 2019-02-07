@@ -598,6 +598,9 @@ void GameplayUpdate() {
   target.m128_f32[1] = g_cam_focus_y / 100.0f;
   target.m128_f32[2] = 0;
   g_per_scene_cb_data.view = DirectX::XMMatrixLookAtLH(eye, target, up);
+
+  g_per_scene_cb_data.win_w = WIN_W;
+  g_per_scene_cb_data.win_h = WIN_H;
 }
 
 // ==============================
